@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 class Collector:
     def __init__(self, storage: Storage, hub: LiveHub, game: str = "auto", rate_hz: float = 50.0,
-                 retry_s: float = 3.0, sim_speed: float = 1.0, stale_s: float = 5.0):
+                 retry_s: float = 3.0, sim_speed: float = 1.0, stale_s: float = 5.0,
+                 check_process: bool = True):
         self.storage = storage
         self.hub = hub
         self.game = game
@@ -31,6 +32,7 @@ class Collector:
         self.retry_s = retry_s
         self.sim_speed = sim_speed
         self.stale_s = stale_s
+        self.check_process = check_process
 
         self.recorder = LapRecorder()
         self.adapter: GameAdapter | None = None
@@ -38,6 +40,7 @@ class Collector:
         self._ref_combo: tuple | None = None
         self._session: SessionInfo | None = None
         self._last_saved: dict | None = None
+        self._create_failed: set[str] = set()
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -62,9 +65,17 @@ class Collector:
 
     # ------------------------------------------------------------------- loop
     def _candidates(self) -> list[GameAdapter]:
-        if self.game != "auto":
-            return [create_adapter(self.game, sim_speed=self.sim_speed)]
-        return [create_adapter(g) for g in detect_running_games()]
+        games = [self.game] if self.game != "auto" else detect_running_games()
+        out: list[GameAdapter] = []
+        for g in games:
+            try:
+                out.append(create_adapter(g, sim_speed=self.sim_speed,
+                                          check_process=self.check_process))
+            except Exception as e:                  # 缺依赖（如 pyirsdk）等：只报一次，不拖垮采集线程
+                if g not in self._create_failed:
+                    self._create_failed.add(g)
+                    log.error("无法创建 %s 适配器：%s", g, e)
+        return out
 
     def _try_connect(self) -> GameAdapter | None:
         for adapter in self._candidates():

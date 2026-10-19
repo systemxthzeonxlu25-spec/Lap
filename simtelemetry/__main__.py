@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--rate", type=float, default=50.0, help="采样频率 Hz")
     p.add_argument("--ws-hz", type=float, default=20.0, help="实时面板推送频率 Hz")
     p.add_argument("--sim-speed", type=float, default=1.0, help="--game sim 时的时间倍速")
+    p.add_argument("--no-process-check", action="store_true",
+                   help="连接前不检查游戏进程（配合 tools/fake_acc.py 测试；ACC/AC 同名映射，平时别用）")
     p.add_argument("--no-collect", action="store_true", help="不采集，只提供网页")
     p.add_argument("--no-web", action="store_true", help="只采集，不提供网页")
     p.add_argument("--log-level", default="INFO")
@@ -60,7 +62,8 @@ def main(argv: list[str] | None = None) -> None:
     storage = Storage(args.db)
     hub = LiveHub()
     collector = None if args.no_collect else Collector(
-        storage, hub, game=args.game, rate_hz=args.rate, sim_speed=args.sim_speed)
+        storage, hub, game=args.game, rate_hz=args.rate, sim_speed=args.sim_speed,
+        check_process=not args.no_process_check)
     log.info("数据库：%s", Path(args.db).resolve())
 
     if args.no_web:

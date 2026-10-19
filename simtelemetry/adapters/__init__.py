@@ -11,7 +11,8 @@ log = logging.getLogger(__name__)
 GAMES = ("acc", "ac", "iracing", "sim")
 
 # 游戏进程名（小写）。ACC 和初代 AC 用的是同名共享内存，只能靠进程区分。
-# TODO(核对)：进程名来自社区资料，如果自动识别不到你的游戏，用 --game 手动指定，并告诉我实际 exe 名。
+# ACC、iRacing（DX11 版）、acs_x86.exe 有社区资料 / 官方支持页佐证；acs.exe（64 位 AC）和 iracingsim64.exe 还未核对。
+# 自动识别不到时用 --game 手动指定，并核对游戏目录里实际的 exe 名。
 PROCESS_NAMES: dict[str, tuple[str, ...]] = {
     "acc": ("ac2-win64-shipping.exe",),
     "ac": ("acs.exe", "acs_x86.exe"),
@@ -19,16 +20,17 @@ PROCESS_NAMES: dict[str, tuple[str, ...]] = {
 }
 
 
-def create_adapter(game: str, sim_speed: float = 1.0) -> GameAdapter:
+def create_adapter(game: str, sim_speed: float = 1.0, check_process: bool = True) -> GameAdapter:
+    """check_process=False：不按进程名确认游戏在跑（配合 tools/fake_acc.py 之类的假数据源）。"""
     if game == "acc":
         from .acc import ACCAdapter
-        return ACCAdapter()
+        return ACCAdapter(check_process=check_process)
     if game == "ac":
         from .ac import ACAdapter
-        return ACAdapter()
+        return ACAdapter(check_process=check_process)
     if game == "iracing":
         from .iracing import IRacingAdapter
-        return IRacingAdapter()
+        return IRacingAdapter(check_process=check_process)
     if game == "sim":
         from .simulated import SimulatedAdapter
         return SimulatedAdapter(speed=sim_speed)
