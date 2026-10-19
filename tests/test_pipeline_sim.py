@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from simtelemetry.adapters.simulated import SyntheticDriver
-from simtelemetry.analysis import LiveReference, compare_laps
+from simtelemetry.analysis import LiveReference, compare_laps, estimate_track_length
 from simtelemetry.models import SessionInfo, TelemetryFrame
 from simtelemetry.recorder import LapRecorder
 from simtelemetry.storage import Storage
@@ -82,3 +82,20 @@ def test_lap_counter_reset_discards_partial_lap():
     out = rec.feed(SESSION, TelemetryFrame(0, 0, 0, 0, 0, 900, 0, 0, 0.9, True, True, 0, True,
                                            tick=999), 5.0)
     assert out == [] and rec.current_lap_number == 1
+
+
+def test_track_length_estimate_and_fallback(tmp_path):
+    laps = drive(60 * 6)
+    clean = next(l for l in laps if l.is_clean)
+    est = estimate_track_length(clean.samples)
+    assert abs(est - 4200) / 4200 < 0.02                       # 合成赛道 4.2 km
+    assert estimate_track_length({"t_ms": [0, 20], "speed": [100, 100], "pos": [0.5, 0.51]}) is None
+
+    no_len = SessionInfo(game="acc", track="t", car="c")          # ACC：游戏不给长度
+    db = Storage(tmp_path / "l.db")
+    for l in laps:
+        l.session = no_len
+    ids = [db.save_lap(l) for l in laps if l.is_clean]
+    a, b = db.get_lap(ids[0]), db.get_lap(ids[-1])
+    res = compare_laps(a, db.get_samples(ids[0]), b, db.get_samples(ids[-1]), 100)
+    assert res["track_length_source"] == "estimated" and abs(res["track_length_m"] - 4200) < 84

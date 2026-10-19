@@ -4,6 +4,8 @@
 - 位置先截到 [0, 1]，再做“累计最大值”，让它单调不减（打滑倒车、噪声不会让距离倒退）；
 - 首尾补上 (0, 0) 和 (1, 圈时)，保证 delta 在终点正好等于两圈圈时差；
 - delta(d) = t_对比(d) - t_参考(d)，正数 = 对比圈更慢。
+
+游戏不给赛道长度时（ACC），用完整圈的速度对时间积分估算，只用来把横轴标成米。
 """
 from __future__ import annotations
 
@@ -95,6 +97,25 @@ def make_grid(points: int) -> list[float]:
     return [i / (points - 1) for i in range(points)]
 
 
+def estimate_track_length(samples: dict[str, list], min_coverage: float = 0.9) -> float | None:
+    """速度（km/h）对本圈计时积分 = 实际行驶距离，再按位置覆盖比例折算成整圈长度（米）。
+
+    行驶线和赛道中心线长度不完全一样，误差一般在 1–2% 以内；相邻采样间隔异常（> 1 s）的段跳过。
+    """
+    t, v, pos = samples.get("t_ms") or [], samples.get("speed") or [], samples.get("pos") or []
+    if len(t) < 2:
+        return None
+    covered = min(1.0, pos[-1]) - max(0.0, pos[0])
+    if covered < min_coverage:
+        return None
+    dist = 0.0
+    for i in range(1, len(t)):
+        dt = (t[i] - t[i - 1]) / 1000.0
+        if 0 < dt <= 1.0:
+            dist += (v[i] + v[i - 1]) / 2 / 3.6 * dt
+    return dist / covered if dist > 0 else None
+
+
 def compare_laps(ref: dict, ref_samples: dict, cmp: dict, cmp_samples: dict, points: int = 1500) -> dict:
     """ref/cmp 是 laps 表的行（dict），*_samples 是列式采样点。"""
     grid = make_grid(points)
@@ -103,9 +124,17 @@ def compare_laps(ref: dict, ref_samples: dict, cmp: dict, cmp_samples: dict, poi
     delta = [round((ct - rt) / 1000.0, 4) if ct is not None and rt is not None else None
              for ct, rt in zip(c["t"], r["t"])]
     length = ref.get("track_length_m") or cmp.get("track_length_m")
+    source = "game" if length else None
+    if not length:
+        for lap, smp in ((ref, ref_samples), (cmp, cmp_samples)):
+            est = estimate_track_length(smp) if lap.get("is_complete") else None
+            if est:
+                length, source = round(est, 1), "estimated"
+                break
     return {
         "x": grid,
         "track_length_m": length,
+        "track_length_source": source,
         "ref": {"lap": ref, **{k: v for k, v in r.items() if k != "t"}},
         "cmp": {"lap": cmp, **{k: v for k, v in c.items() if k != "t"}},
         "delta": delta,
