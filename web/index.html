@@ -1,3 +1,699 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>圈对比</title></head>
-<body>placeholder</body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>圈对比</title>
+<link rel="stylesheet" href="/vendor/uPlot.min.css">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --ring: rgba(11, 11, 11, 0.10);
+  --wash: rgba(11, 11, 11, 0.04);
+  --ref: #2a78d6;          /* 参考圈：分类色 1 */
+  --cmp: #eb6834;          /* 对比圈：分类色 2 */
+  --loss: #d03b3b;         /* delta > 0：对比圈掉时间（状态色 critical） */
+  --gain: #0ca30c;         /* delta < 0：对比圈赚时间（状态色 good） */
+  --gain-text: #006300;
+  --loss-text: #b52f2f;
+  --danger: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --ring: rgba(255, 255, 255, 0.10);
+    --wash: rgba(255, 255, 255, 0.05);
+    --ref: #3987e5;
+    --cmp: #d95926;
+    --gain-text: #0ca30c;
+    --loss-text: #e66767;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+a { color: inherit; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 16px; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+header h1 { font-size: 20px; margin: 0; font-weight: 600; }
+header .spacer { flex: 1; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: var(--surface); box-shadow: 0 0 0 1px var(--ring); color: var(--ink-2); font-size: 13px;
+}
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill.live .dot { background: var(--gain); }
+.btn {
+  font: inherit; color: var(--ink); background: var(--surface); border: 0; border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ring); padding: 6px 12px; cursor: pointer; text-decoration: none;
+}
+.btn:hover { background: var(--wash); }
+.btn:disabled { opacity: .5; cursor: default; }
+.card { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 12px 14px; margin-bottom: 12px; }
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+select {
+  font: inherit; color: var(--ink); background: var(--surface); border: 0; border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ring); padding: 6px 10px; max-width: 100%;
+}
+label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); }
+.muted { color: var(--muted); }
+.empty { padding: 32px 16px; text-align: center; color: var(--ink-2); }
+.empty code { background: var(--wash); padding: 2px 6px; border-radius: 4px; }
+
+/* 圈列表 */
+.laps { max-height: 340px; overflow: auto; margin: -4px -6px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 6px 8px; text-align: left; white-space: nowrap; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+tbody tr { border-top: 1px solid var(--grid); }
+tbody tr:hover { background: var(--wash); }
+tbody tr.is-ref td.c-ref, tbody tr.is-cmp td.c-cmp { font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.radio { width: 44px; text-align: center; }
+input[type=radio] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+input[type=radio].ref { accent-color: var(--ref); }
+input[type=radio].cmp { accent-color: var(--cmp); }
+.gap-pos { color: var(--loss-text); }
+.gap-neg { color: var(--gain-text); }
+.tag {
+  display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 4px; margin-right: 4px;
+  box-shadow: 0 0 0 1px var(--ring); color: var(--ink-2);
+}
+.tag.best { color: var(--ink); font-weight: 600; }
+.tag.bad { color: var(--loss-text); }
+.del { color: var(--muted); background: none; border: 0; cursor: pointer; font: inherit; padding: 2px 6px; border-radius: 6px; }
+.del:hover { color: var(--danger); background: var(--wash); }
+
+/* 摘要 + 读数 */
+.summary { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-end; }
+.stat .label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.stat .value { font-size: 22px; font-weight: 600; }
+.key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; vertical-align: middle; }
+.key.ref { background: var(--ref); }
+.key.cmp { background: var(--cmp); }
+.readout {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 16px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--grid); min-height: 54px;
+}
+.readout .item .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.readout .item .k { color: var(--muted); font-size: 12px; }
+.readout .hint { grid-column: 1 / -1; color: var(--muted); align-self: center; }
+
+/* 图表 */
+.charts-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.legend { display: flex; gap: 16px; color: var(--ink-2); font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-title { font-size: 12px; color: var(--muted); margin: 8px 0 0 4px; }
+.chart { position: relative; }
+.charts.loading { opacity: .45; transition: opacity .15s; }
+.uplot, .uplot * { font-family: inherit; }
+.u-select { background: var(--wash); }
+details summary { cursor: pointer; color: var(--ink-2); }
+.table-view { max-height: 360px; overflow: auto; margin-top: 8px; }
+.err { color: var(--loss-text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>圈对比</h1>
+    <span class="pill" id="status"><span class="dot"></span><span id="status-text">…</span></span>
+    <span class="spacer"></span>
+    <a class="btn" href="/live">实时面板 →</a>
+  </header>
+
+  <div class="filters" id="filters">
+    <select id="combo" aria-label="赛道和车型"></select>
+    <label class="check"><input type="checkbox" id="clean-only"> 只看干净圈</label>
+  </div>
+
+  <div id="empty" class="card empty" hidden>
+    还没有圈数据。开游戏跑几圈，或者先用 <code>python -m simtelemetry --game sim</code> 生成模拟数据。
+  </div>
+
+  <div id="main" hidden>
+    <div class="card">
+      <div class="laps">
+        <table>
+          <thead><tr>
+            <th class="radio">参考</th><th class="radio">对比</th><th class="num">圈</th><th class="num">圈时</th>
+            <th class="num">差距</th><th>时间</th><th>标记</th><th></th>
+          </tr></thead>
+          <tbody id="lap-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="summary" id="summary"></div>
+      <div class="readout" id="readout"><div class="hint">把鼠标移到图上查看该位置的数值；拖选一段放大，双击还原。</div></div>
+    </div>
+
+    <div class="card">
+      <div class="charts-head">
+        <div class="legend">
+          <span><i class="key ref"></i>参考圈</span>
+          <span><i class="key cmp"></i>对比圈</span>
+        </div>
+        <span class="spacer" style="flex:1"></span>
+        <span class="muted" id="axis-note"></span>
+        <button class="btn" id="reset-zoom" type="button">还原缩放</button>
+        <button class="btn" id="export-csv" type="button">导出 CSV</button>
+      </div>
+      <p id="cmp-msg" class="muted" hidden></p>
+      <div class="charts" id="charts"></div>
+      <details id="table-details">
+        <summary>数据表（每 2% 赛道距离一行）</summary>
+        <div class="table-view" id="table-view"></div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/uPlot.iife.min.js"></script>
+<script>
+"use strict";
+const GAME_NAMES = { acc: "ACC", ac: "AC", iracing: "iRacing", sim: "模拟" };
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, "");
+    else if (v !== false && v != null) e.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+}
+
+function fmtLap(ms) {
+  if (ms == null || ms <= 0) return "--:--.---";
+  const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000;
+  return `${m}:${s.toFixed(3).padStart(6, "0")}`;
+}
+function fmtGap(ms) {
+  if (ms == null) return "";
+  if (ms === 0) return "±0.000";
+  return (ms > 0 ? "+" : "−") + (Math.abs(ms) / 1000).toFixed(3);
+}
+function fmtDelta(s) {
+  if (s == null) return "—";
+  return (s > 0 ? "+" : s < 0 ? "−" : "±") + Math.abs(s).toFixed(3) + " s";
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function gearName(g) { return g == null ? "—" : g < 0 ? "R" : g === 0 ? "N" : String(g); }
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+// ------------------------------------------------------------------ 状态
+const state = {
+  combos: [], combo: null, laps: [], bestId: null, ref: null, cmp: null,
+  cmpData: null, plots: [], cleanOnly: false,
+};
+
+function comboKey(c) { return JSON.stringify([c.game, c.track, c.car]); }
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  return { g: p.get("g"), t: p.get("t"), c: p.get("c"), ref: +p.get("ref") || null, cmp: +p.get("cmp") || null };
+}
+function writeHash() {
+  if (!state.combo) return;
+  const p = new URLSearchParams({ g: state.combo.game, t: state.combo.track, c: state.combo.car });
+  if (state.ref) p.set("ref", state.ref);
+  if (state.cmp) p.set("cmp", state.cmp);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+// ---------------------------------------------------------------- 采集状态
+async function pollStatus() {
+  try {
+    const st = await getJSON("/api/status");
+    const c = st.collector, live = st.live || {};
+    let text = "只看历史（未采集）", on = false;
+    if (c) {
+      if (!c.connected) text = "等待游戏…";
+      else {
+        on = live.state === "live";
+        text = `${c.game_name || c.game}${c.track ? " · " + c.track : ""}${on ? "" : "（未在赛道上）"}`;
+      }
+    }
+    $("status-text").textContent = text;
+    $("status").classList.toggle("live", on);
+  } catch {
+    $("status-text").textContent = "服务器连接不上";
+    $("status").classList.remove("live");
+  }
+}
+
+// ---------------------------------------------------------------- 组合 / 圈
+async function loadCombos(initial) {
+  state.combos = await getJSON("/api/combos");
+  const sel = $("combo");
+  const prev = state.combo ? comboKey(state.combo) : null;
+  sel.replaceChildren(...state.combos.map((c) => el("option", { value: comboKey(c) },
+    `${GAME_NAMES[c.game] || c.game} · ${c.track} · ${c.car}（${c.laps} 圈${c.best_ms ? "，最快 " + fmtLap(c.best_ms) : ""}）`)));
+  $("empty").hidden = state.combos.length > 0;
+  $("main").hidden = state.combos.length === 0;
+  $("filters").hidden = state.combos.length === 0;
+  if (!state.combos.length) {
+    state.combo = null;
+    state.laps = [];
+    state.cmpData = null;
+    destroyPlots();
+    return;
+  }
+  let want = prev;
+  if (initial) {
+    const h = readHash();
+    if (h.g) want = JSON.stringify([h.g, h.t, h.c]);
+  }
+  const found = state.combos.find((c) => comboKey(c) === want) || state.combos[0];
+  sel.value = comboKey(found);
+  if (!state.combo || comboKey(found) !== comboKey(state.combo)) {
+    state.combo = found;
+    const h = initial ? readHash() : {};
+    await loadLaps(true, h.ref, h.cmp);
+  }
+}
+
+function pickDefaults(preferRef, preferCmp) {
+  const ids = new Set(state.laps.map((l) => l.id));
+  state.ref = ids.has(preferRef) ? preferRef : (state.bestId ?? state.laps[0]?.id ?? null);
+  if (ids.has(preferCmp) && preferCmp !== state.ref) state.cmp = preferCmp;
+  else {
+    const others = state.laps.filter((l) => l.id !== state.ref);   // 已按时间倒序
+    state.cmp = (others.find((l) => l.is_clean) || others[0])?.id ?? null;
+  }
+}
+
+async function loadLaps(reselect, preferRef, preferCmp) {
+  const c = state.combo;
+  const q = new URLSearchParams({ game: c.game, track: c.track, car: c.car });
+  const r = await getJSON("/api/laps?" + q);
+  const changed = JSON.stringify(r.laps.map((l) => l.id)) !== JSON.stringify(state.laps.map((l) => l.id));
+  state.laps = r.laps;
+  state.bestId = r.best_lap_id;
+  if (reselect) pickDefaults(preferRef, preferCmp);
+  else if (!state.laps.some((l) => l.id === state.ref) || !state.laps.some((l) => l.id === state.cmp)) {
+    pickDefaults(state.ref, state.cmp);
+    reselect = true;
+  }
+  if (changed || reselect) renderLaps();
+  if (reselect) {
+    for (const r of $("lap-rows").querySelectorAll("tr.is-cmp, tr.is-ref")) r.scrollIntoView({ block: "nearest" });
+    await loadCompare();
+  }
+}
+
+function lapTags(l) {
+  const tags = [];
+  if (l.id === state.bestId) tags.push(["最快", "best"]);
+  else if (l.is_clean) tags.push(["干净", ""]);
+  if (!l.is_valid) tags.push(["无效", "bad"]);
+  if (l.is_out_lap) tags.push(["出站", ""]);
+  if (l.is_in_lap) tags.push(["进站", ""]);
+  if (!l.is_complete) tags.push(["不完整", "bad"]);
+  if (l.time_source !== "game") tags.push(["估算圈时", ""]);
+  return tags.map(([t, cls]) => el("span", { class: "tag " + cls }, t));
+}
+
+function renderLaps() {
+  const best = state.laps.find((l) => l.id === state.bestId);
+  const rows = state.laps.filter((l) => !state.cleanOnly || l.is_clean || l.id === state.ref || l.id === state.cmp);
+  $("lap-rows").replaceChildren(...rows.map((l) => {
+    const gap = best ? l.lap_time_ms - best.lap_time_ms : null;
+    const tr = el("tr", { class: (l.id === state.ref ? "is-ref " : "") + (l.id === state.cmp ? "is-cmp" : "") },
+      el("td", { class: "radio c-ref" }, el("input", {
+        type: "radio", name: "ref", class: "ref", "aria-label": `第 ${l.lap_number} 圈设为参考`,
+        checked: l.id === state.ref, onchange: () => select("ref", l.id) })),
+      el("td", { class: "radio c-cmp" }, el("input", {
+        type: "radio", name: "cmp", class: "cmp", "aria-label": `第 ${l.lap_number} 圈设为对比`,
+        checked: l.id === state.cmp, onchange: () => select("cmp", l.id) })),
+      el("td", { class: "num" }, l.lap_number),
+      el("td", { class: "num" }, fmtLap(l.lap_time_ms)),
+      el("td", { class: "num " + (gap > 0 ? "gap-pos" : gap < 0 ? "gap-neg" : "") }, best && l.is_clean ? fmtGap(gap) : ""),
+      el("td", { class: "muted" }, fmtDate(l.recorded_at)),
+      el("td", {}, ...lapTags(l)),
+      el("td", {}, el("button", { class: "del", type: "button", title: "删除这一圈",
+        "aria-label": `删除第 ${l.lap_number} 圈`, onclick: () => deleteLap(l) }, "删除")),
+    );
+    return tr;
+  }));
+}
+
+async function select(which, id) {
+  if (which === "ref" && id === state.cmp) state.cmp = state.ref;      // 互换，避免自己比自己
+  else if (which === "cmp" && id === state.ref) state.ref = state.cmp;
+  state[which] = id;
+  renderLaps();
+  await loadCompare();
+}
+
+async function deleteLap(l) {
+  if (!confirm(`删除第 ${l.lap_number} 圈（${fmtLap(l.lap_time_ms)}）？采样数据会一起删除，无法恢复。`)) return;
+  try {
+    await getJSON(`/api/laps/${l.id}`, { method: "DELETE" });
+  } catch (e) {
+    alert("删除失败：" + e.message);
+    return;
+  }
+  await loadCombos(false);
+  if (state.combo && state.combos.some((c) => comboKey(c) === comboKey(state.combo))) await loadLaps(false);
+}
+
+// -------------------------------------------------------------------- 对比
+let compareSeq = 0;
+async function loadCompare() {
+  writeHash();
+  const msg = $("cmp-msg");
+  if (!state.ref || !state.cmp) {
+    destroyPlots();
+    state.cmpData = null;
+    msg.hidden = false;
+    msg.textContent = "这个组合只有一圈，至少要两圈才能对比。";
+    renderSummary();
+    return;
+  }
+  msg.hidden = true;
+  const seq = ++compareSeq;
+  $("charts").classList.add("loading");
+  try {
+    const width = $("charts").clientWidth || 800;
+    const points = Math.max(400, Math.min(3000, Math.round(width * 1.5)));
+    const data = await getJSON(`/api/compare?ref=${state.ref}&cmp=${state.cmp}&points=${points}`);
+    if (seq !== compareSeq) return;
+    state.cmpData = data;
+    renderSummary();
+    renderCharts();
+    renderTable();
+  } catch (e) {
+    msg.hidden = false;
+    msg.textContent = "加载对比数据失败：" + e.message;
+  } finally {
+    if (seq === compareSeq) $("charts").classList.remove("loading");
+  }
+}
+
+function renderSummary() {
+  const d = state.cmpData, box = $("summary");
+  if (!d) { box.replaceChildren(); return; }
+  const stat = (label, value, key, cls) => el("div", { class: "stat" },
+    el("div", { class: "label" }, key ? el("i", { class: "key " + key }) : null, label),
+    el("div", { class: "value " + (cls || "") }, value));
+  const diff = d.cmp.lap.lap_time_ms - d.ref.lap.lap_time_ms;
+  const len = d.track_length_m;
+  box.replaceChildren(
+    stat(`参考 · 第 ${d.ref.lap.lap_number} 圈`, fmtLap(d.ref.lap.lap_time_ms), "ref"),
+    stat(`对比 · 第 ${d.cmp.lap.lap_number} 圈`, fmtLap(d.cmp.lap.lap_time_ms), "cmp"),
+    stat("对比圈相差", fmtGap(diff) + " s", null, diff > 0 ? "gap-pos" : diff < 0 ? "gap-neg" : ""),
+    stat("赛道长度", len ? `${d.track_length_source === "estimated" ? "≈ " : ""}${(len / 1000).toFixed(2)} km` : "未知"),
+  );
+  $("axis-note").textContent = len
+    ? (d.track_length_source === "estimated" ? "横轴：距离（按参考圈速度积分估算）" : "横轴：距离")
+    : "横轴：赛道位置 %";
+}
+
+// -------------------------------------------------------------------- 图表
+function xValues(d) {
+  const L = d.track_length_m;
+  return L ? d.x.map((v) => v * L) : d.x.map((v) => v * 100);
+}
+function fmtX(v) {
+  const d = state.cmpData;
+  if (!d) return "";
+  if (!d.track_length_m) return v.toFixed(1) + "%";
+  return v >= 1000 ? (v / 1000).toFixed(2) + " km" : Math.round(v) + " m";
+}
+
+function destroyPlots() {
+  for (const p of state.plots) p.destroy();
+  state.plots = [];
+  $("charts").replaceChildren();
+}
+
+// 以 0 为界分色：上面一种颜色、下面一种颜色（delta 和踏板图的零线）
+function splitStyle(up, down) {
+  return (u) => {
+    const { top, height } = u.bbox;
+    const y0 = u.valToPos(0, "y", true);
+    const t = Math.min(1, Math.max(0, (y0 - top) / height));
+    const g = u.ctx.createLinearGradient(0, top, 0, top + height);
+    g.addColorStop(0, up); g.addColorStop(t, up); g.addColorStop(t, down); g.addColorStop(1, down);
+    return g;
+  };
+}
+function withAlpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+let syncing = false;
+function renderCharts() {
+  destroyPlots();
+  const d = state.cmpData;
+  const x = xValues(d);
+  const c = {
+    ref: cssVar("--ref"), cmp: cssVar("--cmp"), loss: cssVar("--loss"), gain: cssVar("--gain"),
+    grid: cssVar("--grid"), muted: cssVar("--muted"), baseline: cssVar("--baseline"),
+  };
+  const width = $("charts").clientWidth;
+  const neg = (arr) => arr.map((v) => (v == null ? null : -v));
+  const pct = (arr) => arr.map((v) => (v == null ? null : v * 100));
+
+  const zeroLine = (u) => {
+    const y = Math.round(u.valToPos(0, "y", true)) + 0.5;
+    if (y < u.bbox.top || y > u.bbox.top + u.bbox.height) return;
+    u.ctx.save();
+    u.ctx.strokeStyle = c.baseline;
+    u.ctx.lineWidth = 1;
+    u.ctx.beginPath();
+    u.ctx.moveTo(u.bbox.left, y);
+    u.ctx.lineTo(u.bbox.left + u.bbox.width, y);
+    u.ctx.stroke();
+    u.ctx.restore();
+  };
+
+  const line = (label, color, extra = {}) => ({ label, stroke: color, width: 2, points: { show: false }, ...extra });
+  const stepped = uPlot.paths.stepped({ align: 1 });
+  const symRange = (u, min, max) => { const m = Math.max(Math.abs(min), Math.abs(max), 0.05) * 1.1; return [-m, m]; };
+
+  const charts = [
+    { title: "速度（km/h）", h: 200,
+      data: [d.ref.speed, d.cmp.speed],
+      series: [line("参考速度", c.ref), line("对比速度", c.cmp)],
+      y: { range: (u, min, max) => [Math.max(0, Math.floor(min / 20) * 20 - 20), Math.ceil(max / 20) * 20 + 10] },
+      yFmt: (v) => String(Math.round(v)) },
+    { title: "油门 ↑ / 刹车 ↓（%）", h: 150,
+      data: [pct(d.ref.throttle), pct(d.cmp.throttle), neg(pct(d.ref.brake)), neg(pct(d.cmp.brake))],
+      series: [line("参考油门", c.ref), line("对比油门", c.cmp), line("参考刹车", c.ref), line("对比刹车", c.cmp)],
+      y: { range: [-105, 105] }, yFmt: (v) => String(Math.abs(Math.round(v))), splits: [-100, -50, 0, 50, 100], zero: true },
+    { title: "转向（−1…1）", h: 120,
+      data: [d.ref.steer, d.cmp.steer],
+      series: [line("参考转向", c.ref), line("对比转向", c.cmp)],
+      y: { range: symRange }, yFmt: (v) => v.toFixed(2), zero: true },
+    { title: "挡位", h: 110,
+      data: [d.ref.gear, d.cmp.gear],
+      series: [line("参考挡位", c.ref, { paths: stepped }), line("对比挡位", c.cmp, { paths: stepped })],
+      y: { range: (u, min, max) => [Math.min(min, 1) - 0.5, max + 0.5] }, yFmt: gearName, intTicks: true },
+    { title: "Delta（s）：上 = 对比圈掉时间，下 = 对比圈赚时间", h: 150,
+      data: [d.delta],
+      series: [line("Delta", null, {
+        stroke: splitStyle(c.loss, c.gain), fill: splitStyle(withAlpha(c.loss, 0.14), withAlpha(c.gain, 0.14)),
+        fillTo: 0 })],
+      y: { range: (u, min, max) => { const lo = Math.min(min, 0), hi = Math.max(max, 0), pad = Math.max(0.05, (hi - lo) * 0.1); return [lo - pad, hi + pad]; } },
+      yFmt: (v) => (v > 0 ? "+" : "") + v.toFixed(Math.abs(v) < 1 ? 2 : 1), zero: true, last: true,
+      pointFill: (u) => ((d.delta[u.cursor.idx] ?? 0) > 0 ? c.loss : c.gain) },
+  ];
+
+  const box = $("charts");
+  for (const def of charts) {
+    def.pointFill ??= (u, si) => u.series[si].stroke(u, si);
+    const host = el("div", { class: "chart" });
+    box.append(el("div", { class: "chart-title" }, def.title), host);
+    const opts = {
+      width, height: def.h + (def.last ? 30 : 0),
+      legend: { show: false },
+      padding: [8, 28, def.last ? 0 : 4, 0],          // 右侧留白给最后一个 x 刻度；各图一致才能上下对齐
+      cursor: {
+        sync: { key: "lap", setSeries: false, scales: ["x", null] },
+        drag: { x: true, y: false, setScale: true },
+        points: { size: 8, width: 2, stroke: cssVar("--surface"), fill: def.pointFill },
+        y: false,
+      },
+      scales: { x: { time: false }, y: def.y },
+      axes: [
+        { show: true, size: def.last ? 30 : 0, stroke: c.muted, values: (u, vals) => vals.map(def.last ? fmtX : () => ""),
+          grid: { stroke: c.grid, width: 1 }, ticks: { show: def.last, stroke: c.baseline, width: 1, size: 4 } },
+        { size: 52, stroke: c.muted, grid: { stroke: c.grid, width: 1 }, ticks: { show: false },
+          values: (u, vals) => vals.map(def.yFmt),
+          ...(def.splits ? { splits: () => def.splits } : {}),
+          ...(def.intTicks ? { incrs: [1, 2, 5], splits: (u, i, min, max) => { const s = []; for (let g = Math.ceil(min); g <= max; g++) s.push(g); return s; } } : {}) },
+      ],
+      series: [{ label: "距离" }, ...def.series],
+      hooks: {
+        drawAxes: def.zero ? [zeroLine] : [],
+        setScale: [(u, key) => {
+          if (key !== "x" || syncing) return;
+          syncing = true;
+          const { min, max } = u.scales.x;
+          for (const p of state.plots) if (p !== u) p.setScale("x", { min, max });
+          syncing = false;
+        }],
+        setCursor: [(u) => updateReadout(u.cursor.idx)],
+      },
+    };
+    state.plots.push(new uPlot(opts, [x, ...def.data], host));
+  }
+}
+
+function resetZoom() {
+  const d = state.cmpData;
+  if (!d || !state.plots.length) return;
+  const x = xValues(d);
+  state.plots[0].setScale("x", { min: x[0], max: x[x.length - 1] });
+}
+
+let readoutData = null, readoutIdx = null;      // 5 张图同步触发，同一位置只画一次
+function updateReadout(i) {
+  const d = state.cmpData, box = $("readout");
+  if (d === readoutData && i === readoutIdx) return;
+  readoutData = d;
+  readoutIdx = i;
+  if (!d || i == null || i < 0) {
+    box.replaceChildren(el("div", { class: "hint" }, "把鼠标移到图上查看该位置的数值；拖选一段放大，双击还原。"));
+    return;
+  }
+  const item = (k, v, key, cls) => el("div", { class: "item" },
+    el("div", { class: "v " + (cls || "") }, v),
+    el("div", { class: "k" }, key ? el("i", { class: "key " + key }) : null, key ? " " : null, k));
+  const n = (v, digits = 0) => (v == null ? "—" : v.toFixed(digits).replace(/^-(0\.?0*)$/, "$1"));
+  const p = (v) => (v == null ? "—" : Math.round(v * 100) + "%");
+  const delta = d.delta[i];
+  box.replaceChildren(
+    item("位置", fmtX(xValues(d)[i])),
+    item("Delta", fmtDelta(delta), null, delta > 0 ? "gap-pos" : delta < 0 ? "gap-neg" : ""),
+    item("参考 速度 km/h", n(d.ref.speed[i]), "ref"), item("对比 速度 km/h", n(d.cmp.speed[i]), "cmp"),
+    item("参考 油门 / 刹车", `${p(d.ref.throttle[i])} / ${p(d.ref.brake[i])}`, "ref"),
+    item("对比 油门 / 刹车", `${p(d.cmp.throttle[i])} / ${p(d.cmp.brake[i])}`, "cmp"),
+    item("参考 挡位", gearName(d.ref.gear[i]), "ref"), item("对比 挡位", gearName(d.cmp.gear[i]), "cmp"),
+    item("参考 转向", n(d.ref.steer[i], 2), "ref"), item("对比 转向", n(d.cmp.steer[i], 2), "cmp"),
+  );
+}
+
+// ------------------------------------------------------------ 数据表 / CSV
+function renderTable() {
+  const det = $("table-details");
+  if (!det.open) return;                       // 展开时再画，省得每次都生成一大张表
+  const d = state.cmpData;
+  if (!d) { $("table-view").replaceChildren(); return; }
+  const x = xValues(d), rows = [];
+  const step = Math.max(1, Math.round((d.x.length - 1) / 50));
+  for (let i = 0; i < d.x.length; i += step) rows.push(i);
+  if (rows[rows.length - 1] !== d.x.length - 1) rows.push(d.x.length - 1);
+  const n = (v, k = 0) => (v == null ? "—" : v.toFixed(k));
+  $("table-view").replaceChildren(el("table", {},
+    el("thead", {}, el("tr", {}, ...["位置", "参考 km/h", "对比 km/h", "参考挡", "对比挡", "Delta s"].map((h, j) =>
+      el("th", { class: j ? "num" : "" }, h)))),
+    el("tbody", {}, ...rows.map((i) => el("tr", {},
+      el("td", {}, fmtX(x[i])), el("td", { class: "num" }, n(d.ref.speed[i])), el("td", { class: "num" }, n(d.cmp.speed[i])),
+      el("td", { class: "num" }, gearName(d.ref.gear[i])), el("td", { class: "num" }, gearName(d.cmp.gear[i])),
+      el("td", { class: "num" }, d.delta[i] == null ? "—" : (d.delta[i] > 0 ? "+" : "") + d.delta[i].toFixed(3)))))));
+}
+
+function exportCSV() {
+  const d = state.cmpData;
+  if (!d) return;
+  const L = d.track_length_m;
+  const head = [L ? "distance_m" : "position_pct"];
+  const cols = [L ? d.x.map((v) => (v * L).toFixed(1)) : d.x.map((v) => (v * 100).toFixed(3))];
+  for (const side of ["ref", "cmp"]) {
+    for (const ch of ["speed", "throttle", "brake", "steer", "gear", "rpm"]) {
+      head.push(`${side}_${ch}`);
+      cols.push(d[side][ch]);
+    }
+  }
+  head.push("delta_s");
+  cols.push(d.delta);
+  const lines = [head.join(",")];
+  for (let i = 0; i < d.x.length; i++) lines.push(cols.map((c) => c[i] ?? "").join(","));
+  const safe = (s) => String(s).replace(/[^\w.-]+/g, "_");
+  const name = `${safe(d.ref.lap.track)}_${safe(d.ref.lap.car)}_ref${d.ref.lap.id}_cmp${d.cmp.lap.id}.csv`;
+  const a = el("a", { href: URL.createObjectURL(new Blob(["﻿" + lines.join("\n")], { type: "text/csv" })), download: name });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+}
+
+// -------------------------------------------------------------------- 启动
+$("combo").addEventListener("change", async (e) => {
+  state.combo = state.combos.find((c) => comboKey(c) === e.target.value);
+  await loadLaps(true);
+});
+$("clean-only").addEventListener("change", (e) => { state.cleanOnly = e.target.checked; renderLaps(); });
+$("reset-zoom").addEventListener("click", resetZoom);
+$("export-csv").addEventListener("click", exportCSV);
+$("table-details").addEventListener("toggle", renderTable);
+
+let resizeTimer = 0, lastWidth = 0;
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const w = $("charts").clientWidth;
+    if (w && w !== lastWidth) {
+      lastWidth = w;
+      for (const p of state.plots) p.setSize({ width: w, height: p.height });
+    }
+  }, 100);
+}).observe($("charts"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.cmpData) renderCharts(); });
+
+async function refresh() {
+  if (document.hidden) return;
+  try {
+    await loadCombos(false);
+    if (state.combo) await loadLaps(false);
+  } catch { /* 下次再试 */ }
+}
+
+(async () => {
+  pollStatus();
+  setInterval(pollStatus, 3000);
+  try {
+    await loadCombos(true);
+  } catch (e) {
+    $("empty").hidden = false;
+    $("empty").textContent = "加载失败：" + e.message;
+  }
+  setInterval(refresh, 10000);                 // 新跑完的圈自动出现在列表里（不改当前选择）
+})();
+</script>
+</body>
+</html>

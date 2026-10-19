@@ -1,3 +1,353 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>实时面板</title></head>
-<body>placeholder</body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>实时面板</title>
+<style>
+:root {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --track: #2c2c2a;
+  --ring: rgba(255, 255, 255, 0.10);
+  --faster: #0ca30c;        /* delta < 0：比参考圈快 */
+  --slower: #e66767;        /* delta > 0：比参考圈慢 */
+  --throttle: #199e70;
+  --brake: #e66767;
+  --warn: #fab219;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--ink); overflow: hidden;
+  font: 15px/1.3 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.app {
+  height: 100%; display: grid; gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+           max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  grid-template-rows: auto auto 1fr auto auto auto;
+  grid-template-areas: "top" "lapline" "delta" "times" "drive" "foot";
+}
+.top { grid-area: top; display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; min-width: 0; }
+.top .where { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--faster); }
+.dot.wait { background: var(--warn); }
+.dot.bad { background: var(--slower); }
+
+.lapline { grid-area: lapline; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.lapline .lapno { color: var(--ink-2); }
+.lapline .cur { font-size: clamp(22px, 6vmin, 40px); font-weight: 600; font-variant-numeric: tabular-nums; }
+.badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; box-shadow: 0 0 0 1px var(--ring); color: var(--ink-2); }
+.badge.bad { color: var(--slower); box-shadow: 0 0 0 1px rgba(230, 103, 103, .5); }
+
+.delta { grid-area: delta; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 0; }
+.delta .label { color: var(--muted); font-size: 13px; letter-spacing: .08em; }
+.delta .value {
+  font-size: clamp(64px, 24vmin, 200px); font-weight: 700; line-height: 1; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; transition: color .2s;
+}
+.delta .value.faster { color: var(--faster); }
+.delta .value.slower { color: var(--slower); }
+.delta .value.unusable { color: var(--muted); }
+.delta .why { color: var(--muted); font-size: 13px; min-height: 1.3em; margin-top: 4px; text-align: center; }
+.bar { width: min(100%, 720px); margin-top: 12px; }
+.bar .track { position: relative; height: 14px; border-radius: 7px; background: var(--surface); overflow: hidden; box-shadow: 0 0 0 1px var(--ring); }
+.bar .fill { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; transition: width .1s linear, left .1s linear; }
+.bar .fill.faster { background: var(--faster); }
+.bar .fill.slower { background: var(--slower); }
+.bar .fill.unusable { background: var(--muted); }
+.bar .center { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink-2); }
+.bar .scale { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+.times { grid-area: times; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tile { background: var(--surface); border-radius: 10px; padding: 8px 10px; box-shadow: 0 0 0 1px var(--ring); min-width: 0; }
+.tile .k { color: var(--muted); font-size: 12px; }
+.tile .v { font-size: clamp(16px, 4.6vmin, 26px); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.drive { grid-area: drive; display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; }
+.gear { font-size: clamp(64px, 20vmin, 150px); font-weight: 700; line-height: .9; min-width: 1.1ch; text-align: center; }
+.speedbox .speed { font-size: clamp(36px, 11vmin, 84px); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.speedbox .unit { color: var(--muted); font-size: 14px; margin-left: 4px; }
+.speedbox .rpm { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.pedals { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.pedal { height: 8px; border-radius: 4px; background: var(--surface); overflow: hidden; box-shadow: 0 0 0 1px var(--ring); }
+.pedal i { display: block; height: 100%; width: 0; }
+.pedal.t i { background: var(--throttle); }
+.pedal.b i { background: var(--brake); }
+
+.foot { grid-area: foot; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.foot .spacer { flex: 1; }
+.btn {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 0; border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ring); padding: 6px 12px; text-decoration: none; cursor: pointer;
+}
+.toast {
+  position: fixed; left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 56px)); transform: translateX(-50%);
+  background: var(--surface); box-shadow: 0 0 0 1px var(--ring), 0 6px 24px rgba(0, 0, 0, .5);
+  border-radius: 12px; padding: 10px 16px; font-size: 15px; white-space: nowrap; opacity: 0; transition: opacity .3s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast .best { color: var(--faster); font-weight: 600; }
+.overlay {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px;
+  background: rgba(13, 13, 13, .82); text-align: center; padding: 24px; font-size: 18px;
+}
+.overlay.show { display: flex; }
+.overlay .sub { color: var(--muted); font-size: 14px; }
+.idle .delta .value, .idle .lapline .cur, .idle .gear, .idle .speedbox .speed { color: var(--muted); }
+
+/* 横屏：左边 delta，右边挡位 / 速度 */
+@media (orientation: landscape) and (min-width: 600px) {
+  .app {
+    grid-template-columns: 1.4fr 1fr;
+    grid-template-rows: auto auto 1fr auto auto;
+    grid-template-areas: "top top" "lapline lapline" "delta drive" "times times" "foot foot";
+  }
+  .drive { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .speedbox { width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="app idle" id="app">
+  <div class="top">
+    <span class="dot" id="conn-dot"></span>
+    <span class="where" id="where">连接中…</span>
+  </div>
+
+  <div class="lapline">
+    <span class="lapno" id="lapno">第 – 圈</span>
+    <span class="cur" id="cur">--:--.---</span>
+    <span class="badge bad" id="invalid" hidden>本圈无效</span>
+    <span class="badge" id="pit" hidden>维修区</span>
+  </div>
+
+  <div class="delta">
+    <div class="label">DELTA（对比个人最快圈）</div>
+    <div class="value unusable" id="delta">–.––</div>
+    <div class="why" id="why"></div>
+    <div class="bar" aria-hidden="true">
+      <div class="track"><div class="fill" id="bar"></div><div class="center"></div></div>
+      <div class="scale"><span>快 −1.0</span><span>0</span><span>+1.0 慢</span></div>
+    </div>
+  </div>
+
+  <div class="times">
+    <div class="tile"><div class="k">预测圈时</div><div class="v" id="pred">--:--.---</div></div>
+    <div class="tile"><div class="k">个人最快</div><div class="v" id="best">--:--.---</div></div>
+    <div class="tile"><div class="k">上一圈</div><div class="v" id="last">--:--.---</div></div>
+  </div>
+
+  <div class="drive">
+    <div class="gear" id="gear">N</div>
+    <div class="speedbox">
+      <div><span class="speed" id="speed">0</span><span class="unit">km/h</span></div>
+      <div class="rpm" id="rpm">0 rpm</div>
+      <div class="pedals">
+        <span>油门</span><div class="pedal t"><i id="thr"></i></div>
+        <span>刹车</span><div class="pedal b"><i id="brk"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span id="hint"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="fs" type="button" hidden>全屏</button>
+    <a class="btn" href="/">圈对比</a>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay"><div id="ov-title"></div><div class="sub" id="ov-sub"></div></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const DELTA_RANGE_MS = 1000;      // delta 条满格 = ±1 s
+const STALE_MS = 4500;            // 服务器没变化时每 2 s 心跳一次，超过这个时间没消息 = 连接停滞
+
+function fmtLap(ms) {
+  if (ms == null || ms <= 0) return "--:--.---";
+  const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000;
+  return `${m}:${s.toFixed(3).padStart(6, "0")}`;
+}
+function fmtDelta(ms) {
+  if (ms == null) return "–.––";
+  const v = Math.abs(ms) / 1000;
+  if (v < 0.005) return "0.00";
+  return (ms > 0 ? "+" : "−") + v.toFixed(2);
+}
+function gearName(g) { return g == null ? "–" : g < 0 ? "R" : g === 0 ? "N" : String(g); }
+function setText(id, t) { const e = $(id); if (e.textContent !== t) e.textContent = t; }
+
+// ------------------------------------------------------------------- 渲染
+let lastMsgAt = 0, lastSavedId = null, toastTimer = 0, firstSnapshot = true;
+
+function showOverlay(title, sub) {
+  $("overlay").classList.add("show");
+  setText("ov-title", title);
+  setText("ov-sub", sub || "");
+}
+function hideOverlay() { $("overlay").classList.remove("show"); }
+
+function render(s) {
+  const live = s.state === "live";
+  $("app").classList.toggle("idle", !live);
+  const dot = $("conn-dot");
+  dot.className = "dot " + (live ? "ok" : s.state === "waiting" ? "wait" : "wait");
+
+  if (s.state === "waiting" || s.state === "starting") {
+    setText("where", "等待游戏…");
+    showOverlay("等待游戏", "打开 ACC / AC / iRacing 并进入赛道后会自动连接");
+  } else if (s.state === "connected" && !s.track) {
+    setText("where", s.game_name || s.game || "已连接");
+    showOverlay(`${s.game_name || "游戏"}已连接`, "还在菜单里，进入赛道后开始显示");
+  } else {
+    hideOverlay();
+    setText("where", [s.game_name, s.track, s.car].filter(Boolean).join(" · ") + (live ? "" : "（暂停 / 回放 / 菜单）"));
+  }
+
+  setText("lapno", s.lap != null ? `第 ${s.lap} 圈` : "第 – 圈");
+  setText("cur", fmtLap(s.lap_time_ms));
+  $("invalid").hidden = s.lap_valid !== false;
+  $("pit").hidden = !s.in_pit;
+
+  // delta
+  const d = s.delta_ms;
+  const usable = live && d != null && s.delta_usable;
+  const cls = d == null ? "unusable" : !usable ? "unusable" : d < 0 ? "faster" : d > 0 ? "slower" : "unusable";
+  const dv = $("delta");
+  dv.className = "value " + cls;
+  setText("delta", fmtDelta(d));
+  let why = "";
+  if (s.ref_lap_ms == null) why = "还没有参考圈：先跑出一圈干净圈（有效、完整、不进出站）";
+  else if (s.in_pit) why = "在维修区";
+  else if (d != null && !s.delta_usable) why = "出站 / 进站 / 中途开始的圈，delta 仅供参考";
+  else if (!live) why = "未在赛道上";
+  setText("why", why);
+
+  const bar = $("bar");
+  const frac = d == null ? 0 : Math.min(1, Math.abs(d) / DELTA_RANGE_MS) / 2;
+  bar.className = "fill " + cls;
+  bar.style.width = (frac * 100).toFixed(2) + "%";
+  bar.style.left = (d != null && d < 0 ? 50 - frac * 100 : 50).toFixed(2) + "%";
+
+  setText("pred", fmtLap(usable ? s.predicted_ms : null));
+  setText("best", fmtLap(s.ref_lap_ms));
+  setText("last", fmtLap(s.last_lap_ms));
+
+  setText("gear", gearName(s.gear));
+  setText("speed", s.speed != null ? String(Math.round(s.speed)) : "0");
+  setText("rpm", `${s.rpm != null ? Math.round(s.rpm) : 0} rpm`);
+  $("thr").style.width = Math.round((s.throttle || 0) * 100) + "%";
+  $("brk").style.width = Math.round((s.brake || 0) * 100) + "%";
+
+  // 刚保存的圈：弹一下（第一次连上时不弹旧的）
+  const ls = s.last_saved;
+  if (ls && ls.id !== lastSavedId) {
+    if (!firstSnapshot) showLapToast(ls, s);
+    lastSavedId = ls.id;
+  }
+  firstSnapshot = false;
+}
+
+function showLapToast(ls, s) {
+  const t = $("toast");
+  const flags = [];
+  if (!ls.is_valid) flags.push("无效");
+  if (ls.is_out_lap) flags.push("出站");
+  if (ls.is_in_lap) flags.push("进站");
+  if (!ls.is_complete) flags.push("不完整");
+  t.replaceChildren(document.createTextNode(`第 ${ls.lap_number} 圈 ${fmtLap(ls.lap_time_ms)}`));
+  if (ls.is_clean && s.ref_lap_id === ls.id) {
+    const b = document.createElement("span");
+    b.className = "best";
+    b.textContent = " · 新的个人最快！";
+    t.append(b);
+  } else {
+    t.append(document.createTextNode(flags.length ? ` · ${flags.join(" / ")}` : " · 已保存"));
+  }
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 8000);
+}
+
+// --------------------------------------------------------------- WebSocket
+let ws = null, retry = 0, retryTimer = 0;
+
+function connect() {
+  clearTimeout(retryTimer);
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/ws/live?hz=20`);
+  ws.onopen = () => { retry = 0; lastMsgAt = performance.now(); };
+  ws.onmessage = (ev) => {
+    lastMsgAt = performance.now();
+    try { render(JSON.parse(ev.data)); } catch (e) { console.error(e); }
+  };
+  ws.onclose = () => {
+    ws = null;
+    $("conn-dot").className = "dot bad";
+    $("app").classList.add("idle");
+    showOverlay("和电脑的连接断开了", `正在重连…（第 ${retry + 1} 次）· 确认电脑上的程序还在运行、手机和电脑在同一个局域网`);
+    const delay = Math.min(5000, 500 * 2 ** retry++);
+    retryTimer = setTimeout(connect, delay);
+  };
+  ws.onerror = () => { try { ws.close(); } catch { /* 交给 onclose */ } };
+}
+
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (performance.now() - lastMsgAt > STALE_MS) {
+    $("conn-dot").className = "dot bad";
+    showOverlay("数据停滞", "超过几秒没收到电脑的消息，正在重连…");
+    try { ws.close(); } catch { /* onclose 会重连 */ }
+  }
+}, 1000);
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { connect(); requestWakeLock(); }
+});
+
+// ------------------------------------------------------------ 常亮 / 全屏
+let wakeLock = null;
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator) || document.hidden) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch { /* 用户没交互过 / 系统拒绝：下次点击再试 */ }
+}
+if ("wakeLock" in navigator) {
+  document.addEventListener("click", requestWakeLock);
+  requestWakeLock();
+} else if (!window.isSecureContext) {
+  $("hint").textContent = "局域网 http 页面不能阻止息屏，可以把手机自动锁屏时间调长";
+}
+
+const fsEnabled = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+if (fsEnabled) {
+  const btn = $("fs");
+  btn.hidden = false;
+  btn.addEventListener("click", () => {
+    const doc = document, root = doc.documentElement;
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) (doc.exitFullscreen || doc.webkitExitFullscreen).call(doc);
+    else (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+  });
+}
+
+connect();
+</script>
+</body>
+</html>
