@@ -2,4 +2,5 @@ fastapi>=0.143
 uvicorn[standard]>=0.30
 pyirsdk>=1.3.5        # 仅 iRacing 需要（阶段 4）
 pytest>=8             # 测试
-httpx>=0.27           # 测试（FastAPI TestClient）
+httpx2>=2.0           # 测试（新版 Starlette 的 TestClient 用它）
+httpx>=0.27           # 测试（旧版 Starlette 的 TestClient 用它）
