@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# 虚拟环境 / 本地 Python 运行时
+.venv/
+venv/
+env/
+.py312/
+
+# 数据库（采集到的圈数据，体积大且是个人数据）
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 本地配置 / 环境变量
+.env
+.env.*
+*.local.json
+.vscode/
+.idea/
+
+# 本地下载的前端库（可选，见 PROGRESS.md）
+web/vendor/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
