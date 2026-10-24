@@ -21,6 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .analysis import estimate_track_length
 from .models import SAMPLE_CHANNELS, LapRecord, SessionInfo, TelemetryFrame
 
 log = logging.getLogger(__name__)
@@ -232,6 +233,9 @@ class LapRecorder:
         is_out = bool(pit[0]) or pit_on
         is_in = bool(pit[-1]) or pit_in
         is_complete = (not p.buf.teleported and pos[0] <= COVERAGE_TOL and pos[-1] >= 1 - COVERAGE_TOL)
+        length = p.session.track_length_m
+        if length is None and is_complete:
+            length = estimate_track_length(pos, t, d["speed"])
 
         rec = LapRecord(
             session=p.session,
@@ -245,6 +249,7 @@ class LapRecorder:
             is_complete=is_complete,
             recorded_at=datetime.now(timezone.utc),
             samples=d,
+            track_length_m=length,
         )
         log.info("完成第 %d 圈 %s（%s）有效=%s 出站=%s 进站=%s 完整=%s 采样=%d",
                  rec.lap_number, format_lap_time(rec.lap_time_ms), source, is_valid, is_out,

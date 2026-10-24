@@ -109,7 +109,7 @@ class Storage:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (s.game, s.track, s.car, s.session_type, rec.session_uid, rec.lap_number,
                  rec.lap_time_ms, rec.time_source, int(rec.is_valid), int(rec.is_out_lap),
-                 int(rec.is_in_lap), int(rec.is_complete), s.track_length_m, n,
+                 int(rec.is_in_lap), int(rec.is_complete), rec.track_length_m, n,
                  rec.recorded_at.isoformat(timespec="seconds")),
             )
             lap_id = int(cur.lastrowid)

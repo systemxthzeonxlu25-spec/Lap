@@ -90,6 +90,25 @@ def resample_lap(samples: dict[str, list], lap_time_ms: int, grid: list[float]) 
     return out
 
 
+def estimate_track_length(pos: list[float], t_ms: list[int], speed_kmh: list[float]) -> float | None:
+    """用速度对时间积分估算赛道长度（ACC 不提供赛道长度）。
+
+    积分第一个到最后一个采样点之间的距离，再除以这段覆盖的归一化位置，抵消首尾没覆盖到的一小段。
+    位置要先经过 unwrap_positions（整圈单调）；覆盖不到 90% 时不估算。
+    """
+    if len(pos) < 2:
+        return None
+    covered = pos[-1] - pos[0]
+    if covered < 0.9:
+        return None
+    dist = 0.0
+    for i in range(1, len(pos)):
+        dt = (t_ms[i] - t_ms[i - 1]) / 1000.0
+        if dt > 0:
+            dist += (speed_kmh[i] + speed_kmh[i - 1]) / 2 / 3.6 * dt
+    return round(dist / covered, 1) if dist > 0 else None
+
+
 def make_grid(points: int) -> list[float]:
     points = max(50, min(int(points), 10000))
     return [i / (points - 1) for i in range(points)]

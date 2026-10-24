@@ -72,6 +72,7 @@ class LapRecord:
     is_complete: bool              # 起终点之间完整覆盖、没有瞬移/缺口
     recorded_at: datetime
     samples: dict[str, list] = field(default_factory=dict)
+    track_length_m: float | None = None   # 游戏给的赛道长度；游戏不给时按本圈速度积分估算
 
     @property
     def is_clean(self) -> bool:

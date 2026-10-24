@@ -8,8 +8,8 @@
 ```bash
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
-python -m simtelemetry                 # 自动识别游戏（目前只有 sim 能真正采集，见“做到一半”）
-python -m pytest -q                    # 29 个测试，全部通过（配置在 pyproject.toml）
+python -m simtelemetry                 # 自动识别游戏（目前 sim、acc 已实现；acc 还没在真游戏上验证）
+python -m pytest -q                    # 47 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -30,6 +30,8 @@ python -m pytest -q                    # 29 个测试，全部通过（配置在
 | `simtelemetry/adapters/__init__.py` | 适配器注册表（`_REGISTRY`：游戏 → 模块/类）+ `is_implemented()` + 按进程名自动识别游戏。新增游戏：写模块、在 `_REGISTRY` 里已有占位，模块存在就自动生效 |
 | `simtelemetry/adapters/winshm.py` | 只读打开命名共享内存（OpenFileMappingW + MapViewOfFile + VirtualQuery），**不会创建**映射（原因见文件头注释） |
 | `simtelemetry/adapters/procs.py` | ctypes + Toolhelp32 列出进程名（不依赖 psutil） |
+| `simtelemetry/adapters/acc.py` | ACC 适配器：`ACCAdapter` 只管开/读/关三个共享内存页，`translate()` 是纯函数（挡位 -1、`iLastTime` 的 INT32_MAX → None、`isInPit or isInPitLane`、`status == LIVE`、physics `packetId` 作 tick），Linux 上也能测 |
+| `tools/fake_acc.py` | `encode()`：合成车手 → ACC 结构体（测试用）；在 Windows 上直接运行会创建 `Local\acpmf_*` 并 60 Hz 写入，映射已存在时拒绝运行 |
 | `simtelemetry/adapters/acc_structs.py` | ACC 三个页面的 ctypes 结构体（physics / graphics / static） |
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
 | `simtelemetry/setups/acc.py` | ACC 调教：`load_setup()` 解析 setup.json，`items()` 换算成游戏里显示的值（胎压 psi、刹车平衡 %、车高 mm…），`diff_setups()` 对比两份（默认跳过游戏算出来的派生值）。没登记的字段按原始值放进“其他”，不会丢 |
@@ -56,12 +58,9 @@ python -m pytest -q                    # 29 个测试，全部通过（配置在
    ACC 的 MoTeC 导出（`.ld` + `.ldx`）可以导入：`.ld` 里的 `LAP_BEACON` 通道实测全是 0，切圈要读 `.ldx` 里的过线时间（微秒），
    参考 gotzl/acctelemetry；`SPEED` 通道看起来是 m/s（未确认）。
 
-1. **ACC 适配器 `adapters/acc.py` 还没写。** `acc_structs.py` 已就绪。计划中的映射关系：
-   `speedKmh`、`gas`、`brake`、`steerAngle`、`gear - 1`、`rpms`、`completedLaps`、`iCurrentTime`、
-   `normalizedCarPosition`、`isInPit or isInPitLane`、`isValidLap`、`iLastTime`（`INT32_MAX` 或 ≤ 0 → None）、
-   `status == ACC_LIVE` 作为 is_live、physics `packetId` 作为 tick；用 `read_consistent()` 防止读到写了一半的数据；
-   `is_running()` 用 `game_process_running("acc")`；track = static `track`，car = static `carModel`，session_type 来自 graphics `session`。
-   还需要一个 Windows 下的测试工具 `tools/fake_acc.py`：用 `mmap` 创建同名映射、写入 `SyntheticDriver` 的数据，端到端测试真实的 ACC 读取路径（如果映射已存在必须拒绝运行，避免写坏游戏的共享内存）。
+1. **ACC 适配器已写完，但还没在真游戏上跑过。** Linux 上用假页面测了整条链路（结构体 → 切圈 → 标记 → 圈时取自游戏）。
+   需要在 Windows 上确认：① `python tools/fake_acc.py` + `python -m simtelemetry --game acc` 端到端能切圈；
+   ② 真 ACC 里挡位、方向盘左右、进出站标记是否正确。
 2. **前端两个页面没做**（`web/index.html`、`web/live.html` 是占位页）。设计已定：
    - 圈对比：选择赛道+车型 → 圈列表（参考/对比单选、圈时、差距、日期、标记、删除）→ 5 张共享横轴的 uPlot 图（速度；油门向上/刹车向下画在同一张图；转向；挡位阶梯线；delta 以 0 为界上红下绿），用 `uPlot.sync(key)` 同步光标和缩放，横轴用米（未知赛道长度时用 %），支持导出 CSV。
    - 实时面板：始终深色，delta 最大 + 居中 delta 条，挡位/速度大字，WebSocket 自动重连，过期检测。
@@ -72,7 +71,7 @@ python -m pytest -q                    # 29 个测试，全部通过（配置在
 ## 已知问题
 
 - `--game acc/ac/iracing` 目前会在启动时直接报“适配器还没有实现”；`--game auto` 检测到这些游戏时只打一条警告并跳过（以前采集线程会因 ImportError 退出，已修复）。
-- ACC 没有提供赛道长度（`trackSPlineLength` 实测为 0），对比图横轴只能用 %。可行办法：用参考圈的速度积分估算赛道长度。
+- ACC 没有提供赛道长度（`trackSPlineLength` 实测为 0）：现在每个完整圈按速度积分估算（`analysis.estimate_track_length`，合成数据误差 < 1 m），存在该圈的 `track_length_m` 里。
 - ACC 的 `isValidLap` 在比赛 / hotstint 会话里压线后也常常保持 1（社区实测），这些会话的“有效”标记不可靠；需要靠官方广播 UDP 接口才能拿到准确值。
 - `steerAngle` 的正负方向（左转是正还是负）文档没写，需要实车记录确认；挡位编码 0=R/1=N/2=1 挡来自社区实测，不在文档里。
 - 测试时 Starlette 提示 `httpx` 用于 TestClient 已弃用（建议改用 `httpx2`），只是警告。
