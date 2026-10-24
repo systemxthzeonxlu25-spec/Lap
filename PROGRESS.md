@@ -38,7 +38,7 @@ python -m pytest -q                    # 47 个测试，全部通过（配置在
 | `simtelemetry/setups/acc_tables.py` | **自动生成，不要手改**。54 辆车的换算规则，移植自 Race Element（GPL-3） |
 | `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
 | `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
-| `web/index.html`、`web/live.html` | **目前只是占位页**（见下文） |
+| `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |
 | `tests/` | `simdrive.py`（测试共用的合成车手驱动）、`test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket）、`test_acc_layout.py`（ACC 结构体大小/偏移）、`test_robustness.py`（未实现游戏、存储/命令行参数） |
 
 ## 已完成
@@ -61,10 +61,14 @@ python -m pytest -q                    # 47 个测试，全部通过（配置在
 1. **ACC 适配器已写完，但还没在真游戏上跑过。** Linux 上用假页面测了整条链路（结构体 → 切圈 → 标记 → 圈时取自游戏）。
    需要在 Windows 上确认：① `python tools/fake_acc.py` + `python -m simtelemetry --game acc` 端到端能切圈；
    ② 真 ACC 里挡位、方向盘左右、进出站标记是否正确。
-2. **前端两个页面没做**（`web/index.html`、`web/live.html` 是占位页）。设计已定：
-   - 圈对比：选择赛道+车型 → 圈列表（参考/对比单选、圈时、差距、日期、标记、删除）→ 5 张共享横轴的 uPlot 图（速度；油门向上/刹车向下画在同一张图；转向；挡位阶梯线；delta 以 0 为界上红下绿），用 `uPlot.sync(key)` 同步光标和缩放，横轴用米（未知赛道长度时用 %），支持导出 CSV。
-   - 实时面板：始终深色，delta 最大 + 居中 delta 条，挡位/速度大字，WebSocket 自动重连，过期检测。
-   - 颜色已用 dataviz 校验器检查过：参考圈蓝 `#2a78d6`（深色 `#3987e5`），对比圈橙 `#eb6834`（深色 `#d95926`），色盲安全，两种主题都通过。
+2. **前端第一版已做好，等你过目**（Playwright 在桌面 / 手机竖屏 / 手机横屏、浅色 / 深色下截图检查过，无横向滚动、无控制台报错）：
+   - 圈对比 `web/index.html`：赛道+车型下拉 → 圈列表（参考/对比单选、圈时、与最快干净圈的差距、标记、删除）→ 5 张共享横轴的 uPlot 图。
+     顺序：delta（最上面，0 以上红 = 对比圈更慢、以下绿）、速度、油门（0 以上）/刹车（0 以下）、挡位阶梯线、转向。
+     颜色只表示哪一圈（参考蓝 / 对比橙）；踏板松开处不画线；光标、框选放大、双击还原五张图同步；图上方一行显示光标处的数值；
+     横轴米（赛道长度未知时用 %），刻度取整；导出 CSV；当前选择写在 URL 里，刷新/分享能回到同一个对比。
+   - 实时面板 `web/live.html`：始终深色；delta 大字 + 居中 ±2 s 条（灰色 = 出站/进站等仅供参考）；挡位、速度、本圈、预测、上一圈、转速、油门/刹车条；
+     存下一圈时弹提示；WebSocket 断线指数退避重连，5 s 没消息视为断线；手机横放时左右分栏。
+   - uPlot 默认从 jsDelivr 加载（`/vendor/*` 307 跳转）；离线使用可把 `uPlot.iife.min.js`、`uPlot.min.css`（1.6.32）放进 `web/vendor/`。
 3. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。
 4. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
 

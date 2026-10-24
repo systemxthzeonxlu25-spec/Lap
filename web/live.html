@@ -1,3 +1,254 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>实时面板</title></head>
-<body>placeholder</body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>实时面板</title>
+<style>
+/* 实时面板始终用深色：开车时放在旁边，不刺眼 */
+:root {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --muted: #898781;
+  --track: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.10);
+  --faster: #0ca30c;
+  --slower: #e66767;
+  --throttle: #0ca30c;
+  --brake: #d03b3b;
+  --warn: #fab219;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--text);
+  font: 15px/1.35 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+           max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: flex; flex-direction: column; gap: 12px; overflow-x: hidden;
+}
+a { color: var(--text-2); }
+
+.top { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; color: var(--text-2); font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+.dot.live { background: var(--faster); }
+.dot.wait { background: var(--warn); }
+.top .session { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hero { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 18px; text-align: center; }
+.hero-label { color: var(--text-2); font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+.delta { font-size: clamp(56px, min(22vw, 24vh), 168px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin: 4px 0 10px; }
+.delta.faster { color: var(--faster); }
+.delta.slower { color: var(--slower); }
+.delta.dim { color: var(--muted); }
+.bar { position: relative; height: 14px; background: var(--track); border-radius: 7px; overflow: hidden; }
+.bar .fill { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; }
+.bar .fill.faster { background: var(--faster); }
+.bar .fill.slower { background: var(--slower); }
+.bar .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--text-2); }
+.bar-scale { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.reason { color: var(--warn); font-size: 13px; min-height: 18px; margin-top: 6px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; min-width: 0; }
+.tile .label { color: var(--text-2); font-size: 12px; }
+.tile .value { font-size: 30px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .value small { font-size: 14px; color: var(--text-2); font-weight: 400; margin-left: 4px; }
+.tile.big .value { font-size: 64px; line-height: 1.05; }
+.tile .value.bad { color: var(--slower); }
+
+.pedals { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pedal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 8px 14px 12px; }
+.pedal .label { color: var(--text-2); font-size: 12px; display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.pedal .track { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; margin-top: 6px; }
+.pedal .track div { height: 100%; width: 0; border-radius: 5px; }
+#thr { background: var(--throttle); }
+#brk { background: var(--brake); }
+
+.toast {
+  position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translate(-50%, 20px);
+  background: #2c2c2a; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px;
+  opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; max-width: calc(100vw - 32px); text-align: center;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+.overlay {
+  position: fixed; inset: 0; background: rgba(13, 13, 13, 0.82); display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 24px; font-size: 18px; color: var(--text-2);
+}
+.overlay[hidden] { display: none; }
+
+/* 手机横放：左边 delta，右边数值 */
+@media (orientation: landscape) and (max-height: 560px) {
+  body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: auto 1fr;
+         align-content: start; height: 100%; }
+  .top { grid-column: 1 / -1; }
+  .hero { display: flex; flex-direction: column; justify-content: center; }
+  .side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { padding: 6px 12px; }
+  .tile .value { font-size: 22px; }
+  .tile.big .value { font-size: 40px; }
+  .pedals { gap: 8px; }
+  .pedal { padding: 6px 12px 8px; }
+}
+.side { display: contents; }
+@media (orientation: landscape) and (max-height: 560px) { .side { display: flex; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <span id="status"><span class="dot"></span>连接中…</span>
+  <span class="session" id="session"></span>
+  <span id="lapno"></span>
+  <a href="/">圈对比</a>
+</div>
+
+<section class="hero" aria-live="off">
+  <div class="hero-label"><span>实时 delta（对比个人最快圈）</span><span id="ref"></span></div>
+  <div class="delta dim" id="delta">–</div>
+  <div class="bar" aria-hidden="true"><div class="fill" id="bar"></div><div class="mid"></div></div>
+  <div class="bar-scale" aria-hidden="true"><span>−2.0 更快</span><span>0</span><span>更慢 +2.0</span></div>
+  <div class="reason" id="reason"></div>
+</section>
+
+<div class="side">
+<section class="grid">
+  <div class="tile big"><div class="label">挡位</div><div class="value" id="gear">–</div></div>
+  <div class="tile big"><div class="label">速度</div><div class="value" id="speed">–<small>km/h</small></div></div>
+  <div class="tile"><div class="label">本圈</div><div class="value" id="laptime">–</div></div>
+  <div class="tile"><div class="label">预测圈时</div><div class="value" id="predicted">–</div></div>
+  <div class="tile"><div class="label">上一圈</div><div class="value" id="last">–</div></div>
+  <div class="tile"><div class="label">转速</div><div class="value" id="rpm">–</div></div>
+</section>
+
+<section class="pedals">
+  <div class="pedal"><div class="label"><span>油门</span><span id="thr-v">0%</span></div><div class="track"><div id="thr"></div></div></div>
+  <div class="pedal"><div class="label"><span>刹车</span><span id="brk-v">0%</span></div><div class="track"><div id="brk"></div></div></div>
+</section>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+<div class="overlay" id="overlay">正在连接电脑…</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const BAR_RANGE_MS = 2000;
+const STALE_MS = 5000;           // 服务器无变化时每 2 s 发心跳，5 s 没消息就当断线
+
+function fmtLap(ms) {
+  if (ms == null || ms <= 0) return "–";
+  const m = Math.floor(ms / 60000), s = Math.floor(ms % 60000 / 1000), milli = ms % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
+}
+function fmtDelta(ms) {
+  return (ms > 0 ? "+" : ms < 0 ? "−" : "±") + (Math.abs(ms) / 1000).toFixed(ms !== 0 && Math.abs(ms) < 10000 ? 3 : 2);
+}
+function set(id, text) { const el = $(id); if (el.textContent !== text) el.textContent = text; }
+
+function render(s) {
+  // 状态行
+  const st = $("status");
+  const label = s.state === "live" ? "实时" : s.state === "connected" ? "已连接 · 暂停 / 菜单中" : "等待游戏";
+  const cls = s.state === "live" ? "live" : s.state === "connected" ? "wait" : "";
+  st.innerHTML = `<span class="dot ${cls}"></span>${label}`;
+  set("session", [s.game_name, s.track, s.car].filter(Boolean).join(" · "));
+  set("lapno", s.lap ? `第 ${s.lap} 圈` : "");
+  set("ref", s.ref_lap_ms ? `参考 ${fmtLap(s.ref_lap_ms)}` : "");
+
+  // delta
+  const d = s.delta_ms, usable = s.delta_usable && d != null;
+  const el = $("delta"), bar = $("bar");
+  if (d == null) {
+    set("delta", "–");
+    el.className = "delta dim";
+    bar.style.width = "0";
+  } else {
+    set("delta", fmtDelta(d));
+    el.className = "delta " + (!usable ? "dim" : d < 0 ? "faster" : d > 0 ? "slower" : "dim");
+    const frac = Math.min(1, Math.abs(d) / BAR_RANGE_MS) * 50;
+    bar.className = "fill " + (d < 0 ? "faster" : "slower");
+    bar.style.width = frac + "%";
+    bar.style.left = d < 0 ? (50 - frac) + "%" : "50%";
+  }
+  let reason = "";
+  if (s.state !== "live") reason = "";
+  else if (!s.ref_lap_ms) reason = "还没有参考圈：先跑出一圈干净圈";
+  else if (s.in_pit) reason = "在维修区";
+  else if (s.lap_valid === false) reason = "本圈已无效";
+  else if (d != null && !usable) reason = "出站 / 进站圈，仅供参考";
+  set("reason", reason);
+
+  // 数值
+  const g = s.gear;
+  set("gear", g == null ? "–" : g < 0 ? "R" : g === 0 ? "N" : String(g));
+  $("speed").firstChild.nodeValue = s.speed == null ? "–" : String(Math.round(s.speed));
+  set("laptime", fmtLap(s.lap_time_ms));
+  $("laptime").classList.toggle("bad", s.lap_valid === false);
+  set("predicted", s.predicted_ms ? fmtLap(s.predicted_ms) : "–");
+  set("last", fmtLap(s.last_lap_ms));
+  set("rpm", s.rpm == null ? "–" : String(s.rpm));
+  const thr = Math.round((s.throttle || 0) * 100), brk = Math.round((s.brake || 0) * 100);
+  $("thr").style.width = thr + "%"; set("thr-v", thr + "%");
+  $("brk").style.width = brk + "%"; set("brk-v", brk + "%");
+
+  // 新存了一圈：提示一下
+  const saved = s.last_saved;
+  if (saved && saved.id !== lastSavedId) {
+    if (lastSavedId !== undefined) {
+      const tags = [saved.is_clean ? "干净圈" : null, !saved.is_valid ? "无效" : null,
+                    saved.is_out_lap ? "出站" : null, saved.is_in_lap ? "进站" : null].filter(Boolean).join(" · ");
+      toast(`第 ${saved.lap_number} 圈 ${fmtLap(saved.lap_time_ms)} 已保存${tags ? "（" + tags + "）" : ""}`);
+    }
+    lastSavedId = saved.id;
+  } else if (!saved && lastSavedId === undefined) {
+    lastSavedId = null;
+  }
+}
+
+let lastSavedId;                 // undefined = 还没收到过第一条消息，不对历史记录弹提示
+let toastTimer = 0;
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+// ------------------------------------------------------------------ WebSocket，断线自动重连
+let ws = null, lastMsg = 0, retry = 0;
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/live?hz=20`);
+  ws.onopen = () => { retry = 0; };
+  ws.onmessage = (ev) => {
+    lastMsg = Date.now();
+    $("overlay").hidden = true;
+    try { render(JSON.parse(ev.data)); } catch (e) { console.error(e); }
+  };
+  ws.onclose = () => {
+    ws = null;
+    $("overlay").hidden = false;
+    $("overlay").textContent = "与电脑的连接断开，正在重连…";
+    setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
+  };
+}
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && lastMsg && Date.now() - lastMsg > STALE_MS) {
+    $("overlay").hidden = false;
+    $("overlay").textContent = "数据停止更新，正在重连…";
+    ws.close();
+  }
+}, 1000);
+connect();
+</script>
+</body>
+</html>
