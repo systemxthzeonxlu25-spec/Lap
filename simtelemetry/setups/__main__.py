@@ -1,7 +1,7 @@
-"""命令行查看 / 对比 ACC 调教。
+"""命令行查看 / 对比调教（ACC 的 .json、LMU 的 .svm，按扩展名识别）。
 
     python -m simtelemetry.setups show a.json
-    python -m simtelemetry.setups diff a.json b.json [--derived]
+    python -m simtelemetry.setups diff a.svm b.svm [--derived]
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import argparse
 import sys
 import unicodedata
 
-from .acc import AccSetup, diff_setups, load_setup
+from . import Setup, diff_setups, load_any
 
 
 def _pad(text: str, width: int, right: bool = False) -> str:
@@ -19,12 +19,12 @@ def _pad(text: str, width: int, right: bool = False) -> str:
     return fill + text if right else text + fill
 
 
-def _header(s: AccSetup) -> str:
+def _header(s: Setup) -> str:
     note = "" if s.has_conversion else "（没有这辆车的换算表，只显示原始值）"
     return f"{s.path.name if s.path else '?'}：{s.car_name}{note}"
 
 
-def show(s: AccSetup) -> None:
+def show(s: Setup) -> None:
     print(_header(s))
     group = None
     for it in s.items():
@@ -35,7 +35,7 @@ def show(s: AccSetup) -> None:
         print(f"  {_pad(it.label, 22)}{it.display}{raw}")
 
 
-def diff(a: AccSetup, b: AccSetup, derived: bool) -> None:
+def diff(a: Setup, b: Setup, derived: bool) -> None:
     print("A =", _header(a))
     print("B =", _header(b))
     if a.car != b.car:
@@ -56,19 +56,19 @@ def diff(a: AccSetup, b: AccSetup, derived: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="python -m simtelemetry.setups", description="查看 / 对比 ACC 调教")
+    p = argparse.ArgumentParser(prog="python -m simtelemetry.setups", description="查看 / 对比调教（ACC .json / LMU .svm）")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("show").add_argument("file")
     d = sub.add_parser("diff")
     d.add_argument("a")
     d.add_argument("b")
-    d.add_argument("--derived", action="store_true", help="同时列出游戏算出来的派生值")
+    d.add_argument("--derived", action="store_true", help="同时列出派生值（ACC）/ 不可调的项（LMU）")
     args = p.parse_args(argv)
     try:
         if args.cmd == "show":
-            show(load_setup(args.file))
+            show(load_any(args.file))
         else:
-            diff(load_setup(args.a), load_setup(args.b), args.derived)
+            diff(load_any(args.a), load_any(args.b), args.derived)
     except (OSError, ValueError) as e:
         sys.exit(f"错误：{e}")
 

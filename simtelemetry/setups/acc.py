@@ -11,49 +11,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from .acc_tables import CARS
+from .base import Change, SetupItem, diff_setups
+
+__all__ = ["AccSetup", "Change", "SetupItem", "apply_rule", "diff_setups", "load_setup"]
 
 WHEELS = ("左前", "右前", "左后", "右后")
 FRONT_REAR = ("前", "后")
-
-
-@dataclass(frozen=True, slots=True)
-class SetupItem:
-    key: str                  # 稳定的标识，如 "tyre_pressure.lf"，对比时按它配对
-    group: str                # 轮胎 / 定位 / 电子 / 机械 / 阻尼 / 空力 / 传动 / 策略 / 派生 / 其他
-    label: str
-    raw: Any                  # 文件里的原始值
-    value: float | None       # 换算后的值；没有换算规则时为 None
-    unit: str = ""
-    derived: bool = False     # 游戏算出来的值，不是直接调的
-
-    @property
-    def display(self) -> str:
-        v = self.raw if self.value is None else self.value
-        if isinstance(v, float):
-            v = f"{v:.{4 if self.derived else 2}f}".rstrip("0")
-            v += "0" if v.endswith(".") else ""          # 26.0 而不是 26.
-        return f"{v} {self.unit}".strip()
-
-
-@dataclass(frozen=True, slots=True)
-class Change:
-    key: str
-    group: str
-    label: str
-    unit: str
-    derived: bool
-    a: SetupItem | None       # None = 这一边没有这个字段
-    b: SetupItem | None
-
-    @property
-    def clicks(self) -> int | None:
-        """b 相对 a 改了几格（两边都是整数格数时）。"""
-        if self.a and self.b and isinstance(self.a.raw, int) and isinstance(self.b.raw, int):
-            return self.b.raw - self.a.raw
-        return None
 
 
 @dataclass(slots=True)
@@ -243,30 +208,3 @@ def _unknown_leaves(node, path: tuple[str, ...]) -> list[SetupItem]:
 
 
 _PREFIX_GROUPS = {("basicSetup", "strategy"): "策略", ("basicSetup", "electronics"): "电子"}
-
-
-# ---------------------------------------------------------------------------- 对比
-def _same(a: SetupItem, b: SetupItem) -> bool:
-    if isinstance(a.raw, float) or isinstance(b.raw, float):
-        try:
-            return abs(float(a.raw) - float(b.raw)) < 1e-6
-        except (TypeError, ValueError):
-            return a.raw == b.raw
-    return a.raw == b.raw
-
-
-def diff_setups(a: AccSetup, b: AccSetup, include_derived: bool = False) -> list[Change]:
-    """按 key 配对，返回有差异的项（顺序同 a 的字段顺序，b 独有的放最后）。"""
-    ia = {it.key: it for it in a.items()}
-    ib = {it.key: it for it in b.items()}
-    out: list[Change] = []
-    for key in [*ia, *(k for k in ib if k not in ia)]:
-        x, y = ia.get(key), ib.get(key)
-        ref = x or y
-        assert ref is not None
-        if ref.derived and not include_derived:
-            continue
-        if x is not None and y is not None and _same(x, y):
-            continue
-        out.append(Change(key, ref.group, ref.label, ref.unit, ref.derived, x, y))
-    return out

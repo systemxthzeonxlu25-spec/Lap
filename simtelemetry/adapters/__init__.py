@@ -13,16 +13,18 @@ log = logging.getLogger(__name__)
 # 游戏 → (模块, 类名)。模块不存在（还没写）的游戏照样列在这里，is_implemented() 会告诉调用方。
 _REGISTRY: dict[str, tuple[str, str]] = {
     "acc": (".acc", "ACCAdapter"),
+    "lmu": (".lmu", "LMUAdapter"),
     "ac": (".ac", "ACAdapter"),
     "iracing": (".iracing", "IRacingAdapter"),
     "sim": (".simulated", "SimulatedAdapter"),
 }
 GAMES = tuple(_REGISTRY)
 
-# 游戏进程名（小写）。ACC 和初代 AC 用的是同名共享内存，只能靠进程区分。
+# 游戏进程名（小写），按优先级排列。ACC 和初代 AC 用的是同名共享内存，只能靠进程区分。
 # TODO(核对)：进程名来自社区资料，如果自动识别不到你的游戏，用 --game 手动指定，并告诉我实际 exe 名。
 PROCESS_NAMES: dict[str, tuple[str, ...]] = {
     "acc": ("ac2-win64-shipping.exe",),
+    "lmu": ("le mans ultimate.exe",),     # 来自 pyLMUSharedMemory 的进程名常量，未在真机核对
     "ac": ("acs.exe", "acs_x86.exe"),
     "iracing": ("iracingsim64dx11.exe", "iracingsim64.exe"),
 }

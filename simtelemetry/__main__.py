@@ -17,7 +17,7 @@ from pathlib import Path
 from .adapters import GAMES, is_implemented
 from .collector import Collector
 from .live import LiveHub
-from .setups.library import SetupLibrary, default_acc_setups_dir
+from .setups.library import SetupLibrary, default_acc_setups_dir, default_lmu_setups_dir
 from .storage import DEFAULT_DB, Storage
 
 
@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--no-web", action="store_true", help="只采集，不提供网页")
     p.add_argument("--acc-setups", metavar="DIR",
                    help="ACC 调教目录（默认自动找“文档/Assetto Corsa Competizione/Setups”）")
+    p.add_argument("--lmu-setups", metavar="DIR",
+                   help="LMU 调教目录（默认在 Steam 库里找“Le Mans Ultimate/UserData/player/Settings”）")
     p.add_argument("--no-setups", action="store_true", help="不扫描调教目录")
     p.add_argument("--log-level", default="INFO", type=str.upper,
                    choices=("DEBUG", "INFO", "WARNING", "ERROR"))
@@ -90,12 +92,18 @@ def main(argv: list[str] | None = None) -> None:
 
     setups = None
     if not args.no_setups:
-        acc_dir = Path(args.acc_setups) if args.acc_setups else default_acc_setups_dir()
-        if acc_dir is not None:
-            log.info("调教库：扫描 %s（只读）", acc_dir)
-            setups = SetupLibrary(storage, {"acc": acc_dir})
-        else:
-            log.info("调教库：没找到 ACC 调教目录，可以用 --acc-setups 指定")
+        roots = {
+            "acc": Path(args.acc_setups) if args.acc_setups else default_acc_setups_dir(),
+            "lmu": Path(args.lmu_setups) if args.lmu_setups else default_lmu_setups_dir(),
+        }
+        for game, flag in (("acc", "--acc-setups"), ("lmu", "--lmu-setups")):
+            if roots[game] is None:
+                log.info("调教库：没找到 %s 调教目录，可以用 %s 指定", game.upper(), flag)
+            else:
+                log.info("调教库：扫描 %s（只读）", roots[game])
+        roots = {g: d for g, d in roots.items() if d is not None}
+        if roots:
+            setups = SetupLibrary(storage, roots)
 
     app = create_app(storage, hub, collector, ws_hz=args.ws_hz, setups=setups)
     log.info("圈对比：http://127.0.0.1:%d/   实时面板：http://127.0.0.1:%d/live", args.port, args.port)

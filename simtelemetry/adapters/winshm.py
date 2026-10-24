@@ -127,6 +127,16 @@ class SharedMemoryPage:
         ctypes.memmove(ctypes.addressof(obj), self._addr, n)
         return obj
 
+    def read_at(self, struct_type: type[ctypes.Structure], offset: int):
+        """只拷贝映射里 offset 处的一个结构体（LMU 的映射有 300 多 KB，每帧整块拷贝没必要）。"""
+        if self._addr is None:
+            raise RuntimeError(f"{self.name} 未打开")
+        obj = struct_type()
+        n = max(0, min(ctypes.sizeof(obj), self._size - offset))
+        if n:
+            ctypes.memmove(ctypes.addressof(obj), self._addr + offset, n)
+        return obj
+
     def close(self) -> None:
         if self._addr is not None:
             _UnmapViewOfFile(self._addr)

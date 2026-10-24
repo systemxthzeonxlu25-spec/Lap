@@ -63,8 +63,9 @@ td.derived { color: var(--muted); }
 
 <main>
   <div class="empty card" id="disabled" hidden>
-    没有找到 ACC 调教目录。启动时用 <code>--acc-setups "调教目录"</code> 指定，例如
-    <code>C:\Users\你\Documents\Assetto Corsa Competizione\Setups</code>。
+    没有找到调教目录。启动时用 <code>--acc-setups "目录"</code> / <code>--lmu-setups "目录"</code> 指定，例如
+    <code>C:\Users\你\Documents\Assetto Corsa Competizione\Setups</code>、
+    <code>…\steamapps\common\Le Mans Ultimate\UserData\player\Settings</code>。
   </div>
 
   <div class="layout" id="layout" hidden>
@@ -95,7 +96,7 @@ td.derived { color: var(--muted); }
           </table>
         </div>
         <div class="hint" style="padding: 8px 16px 12px">
-          A / B 可以选不同文件的版本：在别的调教里选一个 B，就能和这里的 A 对比。版本是只读快照，游戏目录里的文件从不被改动。
+          手动选过 A 之后 A 会固定：再点别的调教文件，就是“固定的 A ↔ 那个文件的最新版本”。版本是只读快照，游戏目录里的文件从不被改动。
         </div>
       </section>
 
@@ -103,7 +104,7 @@ td.derived { color: var(--muted); }
         <div class="card-head">
           <div class="compare-head" id="c-head"></div>
           <span class="spacer" style="flex:1"></span>
-          <label class="toggle"><input type="checkbox" id="c-derived">显示派生值</label>
+          <label class="toggle"><input type="checkbox" id="c-derived">显示派生值 / 不可调项</label>
         </div>
         <div class="warn" id="c-warn" style="padding: 0 16px"></div>
         <div class="table-wrap" style="max-height: none">
@@ -119,7 +120,9 @@ td.derived { color: var(--muted); }
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { files: [], file: null, a: null, b: null };   // a / b：{ id, label }
+// a / b：{ id, label }；pinnedA = 用户手动选过 A，换文件时保留它，用来跨文件对比
+const state = { files: [], file: null, a: null, b: null, pinnedA: false };
+const GAME_NAMES = { acc: "ACC", lmu: "LMU" };
 
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
@@ -150,7 +153,7 @@ async function loadFiles() {
 
 function renderFiles() {
   const q = $("filter").value.trim().toLowerCase();
-  const match = (f) => !q || [f.car, f.car_name, f.track, f.name, f.note, ...f.tags].join(" ").toLowerCase().includes(q);
+  const match = (f) => !q || [f.game, f.car, f.car_name, f.track, f.name, f.note, ...f.tags].join(" ").toLowerCase().includes(q);
   const list = state.files.filter(match);
   $("count").textContent = `${list.length} / ${state.files.length}`;
   const box = $("files");
@@ -161,7 +164,11 @@ function renderFiles() {
   }
   let car = null, track = null;
   for (const f of list) {
-    if (f.car !== car) { car = f.car; track = null; box.insertAdjacentHTML("beforeend", `<div class="group-car">${esc(f.car_name)}</div>`); }
+    const carKey = f.game + "/" + f.car;
+    if (carKey !== car) {
+      car = carKey; track = null;
+      box.insertAdjacentHTML("beforeend", `<div class="group-car">${esc(f.car_name)} <span class="chip">${GAME_NAMES[f.game] || esc(f.game)}</span></div>`);
+    }
     if (f.track !== track) { track = f.track; box.insertAdjacentHTML("beforeend", `<div class="group-track">${esc(f.track)}</div>`); }
     const btn = document.createElement("button");
     btn.className = "file";
@@ -192,8 +199,12 @@ async function selectFile(id) {
   // 默认：上一个版本 → 最新版本，看最近改了什么；只有一个版本时就只看它
   const [latest, prev] = f.versions;
   const label = (v) => `${f.name}（${fmtTime(v.captured_at)}）`;
-  state.a = prev ? { id: prev.id, label: label(prev) } : { id: latest.id, label: label(latest) };
-  state.b = prev ? { id: latest.id, label: label(latest) } : null;
+  if (state.pinnedA && state.a) {
+    state.b = { id: latest.id, label: label(latest) };          // 跨文件对比：固定的 A ↔ 这个文件的最新版本
+  } else {
+    state.a = prev ? { id: prev.id, label: label(prev) } : { id: latest.id, label: label(latest) };
+    state.b = prev ? { id: latest.id, label: label(latest) } : null;
+  }
   renderVersions();
   await renderCompare();
 }
@@ -211,7 +222,7 @@ function renderVersions() {
       <td>${fmtTime(v.file_mtime)}</td>
       <td><a href="/api/setups/versions/${v.id}/raw" download>下载</a></td>`;
     const [ra, rb] = tr.querySelectorAll("input");
-    ra.onchange = () => { state.a = { id: v.id, label }; renderCompare(); };
+    ra.onclick = () => { state.a = { id: v.id, label }; state.pinnedA = true; renderCompare(); };   // click：已选中的也能点来固定
     rb.onchange = () => { state.b = { id: v.id, label }; renderCompare(); };
     tbody.append(tr);
   });
@@ -274,7 +285,10 @@ async function renderCompare() {
     return;
   }
 
-  $("c-head").innerHTML = `<b>A</b><span>${esc(state.a.label)}</span><b>B</b><span>${esc(state.b.label)}</span>`;
+  $("c-head").innerHTML = `<b>A</b><span>${esc(state.a.label)}${state.pinnedA
+    ? ' <button class="del" id="unpin" title="取消固定：换文件时 A 跟着换">已固定 ✕</button>' : ""}</span>
+    <b>B</b><span>${esc(state.b.label)}</span>`;
+  if (state.pinnedA) $("unpin").onclick = () => { state.pinnedA = false; selectFile(state.file.id); };
   const d = await getJSON(`/api/setups/diff?a=${state.a.id}&b=${state.b.id}&derived=${derived}`);
   if (!d.same_car) $("c-warn").textContent = `两套调教不是同一辆车（${d.a.car} / ${d.b.car}），格数含义可能不同`;
   if (!d.changes.length) {

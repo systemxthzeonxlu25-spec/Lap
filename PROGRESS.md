@@ -8,8 +8,8 @@
 ```bash
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
-python -m simtelemetry                 # 自动识别游戏（目前 sim、acc 已实现；acc 还没在真游戏上验证）
-python -m pytest -q                    # 59 个测试，全部通过（配置在 pyproject.toml）
+python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
+python -m pytest -q                    # 76 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -32,6 +32,9 @@ python -m pytest -q                    # 59 个测试，全部通过（配置在
 | `simtelemetry/adapters/procs.py` | ctypes + Toolhelp32 列出进程名（不依赖 psutil） |
 | `simtelemetry/adapters/acc.py` | ACC 适配器：`ACCAdapter` 只管开/读/关三个共享内存页，`translate()` 是纯函数（挡位 -1、`iLastTime` 的 INT32_MAX → None、`isInPit or isInPitLane`、`status == LIVE`、physics `packetId` 作 tick），Linux 上也能测 |
 | `tools/fake_acc.py` | `encode()`：合成车手 → ACC 结构体（测试用）；在 Windows 上直接运行会创建 `Local\acpmf_*` 并 60 Hz 写入，映射已存在时拒绝运行 |
+| `simtelemetry/adapters/lmu.py`、`lmu_structs.py` | LMU 适配器：读游戏自带的 `LMU_Data` 共享内存（需打开 Enable Plugins），只拷玩家那辆车的遥测 + 计分；`translate()` 是纯函数；计分比遥测慢时按速度外推位置；读到不合理的数（布局可能变了）时报警并不记录。结构体由脚本从 TinyPedal/pyLMUSharedMemory（MIT）机械转写 |
+| `tools/fake_lmu.py`、`tools/lmu_dump.py` | 假 LMU（测试 + Windows 端到端，映射已存在时拒绝运行）；只读地把 `LMU_Data` 原样存成文件，出问题时用来离线复现 |
+| `simtelemetry/setups/base.py`、`setups/lmu.py` | 各游戏共用的 `SetupItem` / `Change` / `diff_setups`；LMU `.svm` 解析（“键=格数//显示值”，显示值直接用游戏写的，不需要换算表；Non-adjustable / N/A / Fixed 归“不可调”） |
 | `simtelemetry/adapters/acc_structs.py` | ACC 三个页面的 ctypes 结构体（physics / graphics / static） |
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
 | `simtelemetry/setups/acc.py` | ACC 调教：`load_setup()` 解析 setup.json，`items()` 换算成游戏里显示的值（胎压 psi、刹车平衡 %、车高 mm…），`diff_setups()` 对比两份（默认跳过游戏算出来的派生值）。没登记的字段按原始值放进“其他”，不会丢 |
@@ -76,9 +79,13 @@ python -m pytest -q                    # 59 个测试，全部通过（配置在
    按“距离和其它圈中位数差 > 3% = 不完整”“停车 > 3 s = 进站圈”过滤。**还没拿到真实 `.ldx` 样本**，解析按 acctelemetry 的读法写的。
    **已知限制**：MoTeC 里没有赛道位置通道，位置靠速度积分，两圈之间会错开几十米，对比图在刹车点上 delta 会出现尖刺；
    可以考虑用弯心（速度极小值）分段对齐来修正。实时采集的圈用游戏给的位置，不受影响。还没有网页上传入口。
-5. **LMU 适配器没开始**（作者自己主要玩 ACC 和 LMU，优先级高于 AC / iRacing）。初步调研：新版本工具（LMU Pitwall、TinyPedal）读游戏自带的
-   `LMU_Data` 共享内存（需在游戏设置里打开 “Enable Plugins”），老教程用 rF2SharedMemoryMapPlugin；两者布局不同，`LMU_Data` 的布局还没找到官方文档，
-   开工前要交叉核对开源实现并把结论存进仓库。rF2 系会直接给赛道长度（米）。
+5. **LMU 已写完，但还没在真游戏上跑过**（作者自己主要玩 ACC 和 LMU）。
+   - 采集：`LMU_Data` 布局只有 pyLMUSharedMemory 一个来源（它照游戏 `Support/SharedMemoryInterface` 下的 S397 头文件写；官方头文件不允许再分发，所以没收录）。
+     KoDriver、goLMUSharedMemory 等都是从它推出来的，**没有独立实测**。大小/偏移由 `tests/test_lmu.py` 固定，适配器连上后做合理性检查。
+     需要在 Windows 上确认：`tools/fake_lmu.py` + `--game lmu` 能切圈；真 LMU 里挡位、方向、进出站、无效圈、计分刷新频率。数据不对时用 `tools/lmu_dump.py` 存一份。
+     进程名 `Le Mans Ultimate.exe` 来自 pyLMUSharedMemory 的常量，未核对。
+   - 调教：`.svm` 格式按 91 个公开 LMU 调教（GitHub seralaci/Le-Mans-Ultimate-Setups）核对过，全部能解析；没有收录任何真实调教。
+     调教目录默认在 Steam 库（读 `libraryfolders.vdf`）里找 `Le Mans Ultimate/UserData/player/Settings`，可用 `--lmu-setups` 指定。
 6. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。（给社区做的，排在 LMU 后面）
 7. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
 
