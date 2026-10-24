@@ -38,7 +38,6 @@ HOLD_MAX_FRAMES = 25           # 起终点附近计时先归零时，最多等�
 @dataclass
 class _LapBuffer:
     lap_number: int
-    start_lap_count: int
     data: dict[str, list] = field(default_factory=lambda: {c: [] for c in SAMPLE_CHANNELS})
     last_wall: float = 0.0
     last_t_ms: int = 0
@@ -179,7 +178,7 @@ class LapRecorder:
 
     # ----------------------------------------------------------------- private
     def _start_lap(self, lap_count: int, wall: float) -> None:
-        self._buf = _LapBuffer(lap_number=lap_count + 1, start_lap_count=lap_count, last_wall=wall)
+        self._buf = _LapBuffer(lap_number=lap_count + 1, last_wall=wall)
 
     def _close_lap(self, f: TelemetryFrame, wall: float) -> None:
         buf = self._buf

@@ -146,9 +146,3 @@ def read_consistent(page: SharedMemoryPage, tries: int = 3):
             return again
         obj = again
     return obj
-
-
-def wstr(arr) -> str:
-    """ctypes wchar 数组 → str（遇到第一个 \\0 截止）。"""
-    s = arr if isinstance(arr, str) else "".join(arr)
-    return s.split("\x00", 1)[0].strip()

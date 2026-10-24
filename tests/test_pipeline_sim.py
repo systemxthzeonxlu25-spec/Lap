@@ -1,32 +1,12 @@
 """合成车手 → 切圈 → 存库 → 对比，全流程（不依赖游戏、不依赖 Windows）。"""
 from __future__ import annotations
 
-from simtelemetry.adapters.simulated import SyntheticDriver
+from simdrive import SESSION, drive
+
 from simtelemetry.analysis import LiveReference, compare_laps
-from simtelemetry.models import SessionInfo, TelemetryFrame
+from simtelemetry.models import TelemetryFrame
 from simtelemetry.recorder import LapRecorder
 from simtelemetry.storage import Storage
-
-SESSION = SessionInfo(game="sim", track="Synthetic Ring", car="Demo GT3", track_length_m=4200.0)
-DT = 0.02
-
-
-def drive(seconds: float, seed: int = 3):
-    drv = SyntheticDriver(seed=seed, laps_between_stops=4)
-    rec = LapRecorder()
-    laps = []
-    wall = 0.0
-    for tick in range(int(seconds / DT)):
-        s = drv.step(DT)
-        wall += DT
-        f = TelemetryFrame(
-            speed_kmh=s.speed_kmh, throttle=s.throttle, brake=s.brake, steer=s.steer, gear=s.gear,
-            rpm=s.rpm, lap_count=s.lap_count, lap_time_ms=s.lap_time_ms, pos=s.pos,
-            in_pit=s.in_pit or s.in_pit_lane, lap_valid=s.lap_valid, last_lap_ms=s.last_lap_ms,
-            is_live=True, tick=tick)
-        laps += rec.feed(SESSION, f, wall)
-    laps += rec.flush(wall + 10)
-    return laps
 
 
 def test_laps_are_split_and_flagged(tmp_path):

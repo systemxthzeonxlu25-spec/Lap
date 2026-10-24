@@ -5,13 +5,12 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from simdrive import SESSION, drive
 
 from simtelemetry.collector import Collector
 from simtelemetry.live import LiveHub
 from simtelemetry.server import create_app
 from simtelemetry.storage import Storage
-
-from test_pipeline_sim import SESSION, drive
 
 
 @pytest.fixture(scope="module")

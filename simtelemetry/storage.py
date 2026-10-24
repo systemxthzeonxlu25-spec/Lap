@@ -10,11 +10,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from .models import SAMPLE_CHANNELS, LapRecord
+from .models import SAMPLE_CHANNELS, LapRecord, is_clean_lap
 
 SCHEMA_VERSION = 1
 
-# “干净圈”：参与最快圈比较
+# “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
 
 _SCHEMA = """
@@ -65,16 +65,22 @@ def _lap_row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     for k in ("is_valid", "is_out_lap", "is_in_lap", "is_complete"):
         d[k] = bool(d[k])
-    d["is_clean"] = d["is_valid"] and d["is_complete"] and not d["is_out_lap"] and not d["is_in_lap"]
+    d["is_clean"] = is_clean_lap(d["is_valid"], d["is_complete"], d["is_out_lap"], d["is_in_lap"])
     return d
 
 
 class Storage:
     def __init__(self, path: str | Path):
         self.path = str(path)
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        if self.path == ":memory:" or self.path.startswith("file:"):
+            # 每次操作都新开连接，内存库每次都是空的，表建完就没了
+            raise ValueError("Storage 需要一个文件路径（测试请用临时目录下的文件）")
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as con:
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError(f"数据库 {self.path} 的结构版本是 {version}，比本程序支持的 "
+                                   f"{SCHEMA_VERSION} 新，请升级程序")
             con.execute("PRAGMA journal_mode = WAL")
             con.executescript(_SCHEMA)
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

@@ -14,7 +14,7 @@ import socket
 import threading
 from pathlib import Path
 
-from .adapters import GAMES
+from .adapters import GAMES, is_implemented
 from .collector import Collector
 from .live import LiveHub
 from .storage import Storage
@@ -50,10 +50,18 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--sim-speed", type=float, default=1.0, help="--game sim 时的时间倍速")
     p.add_argument("--no-collect", action="store_true", help="不采集，只提供网页")
     p.add_argument("--no-web", action="store_true", help="只采集，不提供网页")
-    p.add_argument("--log-level", default="INFO")
+    p.add_argument("--log-level", default="INFO", type=str.upper,
+                   choices=("DEBUG", "INFO", "WARNING", "ERROR"))
     args = p.parse_args(argv)
 
-    logging.basicConfig(level=args.log_level.upper(),
+    if args.no_web and args.no_collect:
+        p.error("--no-web 和 --no-collect 不能同时使用")
+    if args.rate <= 0 or args.ws_hz <= 0 or args.sim_speed <= 0:
+        p.error("--rate / --ws-hz / --sim-speed 必须大于 0")
+    if not args.no_collect and args.game != "auto" and not is_implemented(args.game):
+        p.error(f"{args.game} 的适配器还没有实现（目前可用：sim、auto）")
+
+    logging.basicConfig(level=args.log_level,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S")
     log = logging.getLogger("simtelemetry")
 
@@ -64,8 +72,7 @@ def main(argv: list[str] | None = None) -> None:
     log.info("数据库：%s", Path(args.db).resolve())
 
     if args.no_web:
-        if collector is None:
-            p.error("--no-web 和 --no-collect 不能同时使用")
+        assert collector is not None
         collector.start()
         stop = threading.Event()
         signal.signal(signal.SIGINT, lambda *_: stop.set())

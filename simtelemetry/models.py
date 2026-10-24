@@ -54,6 +54,11 @@ SAMPLE_CHANNELS: tuple[str, ...] = (
 )
 
 
+def is_clean_lap(is_valid: bool, is_complete: bool, is_out_lap: bool, is_in_lap: bool) -> bool:
+    """“干净圈”：可以参与最快圈比较。改这里时同步改 storage.CLEAN_SQL。"""
+    return bool(is_valid and is_complete and not is_out_lap and not is_in_lap)
+
+
 @dataclass(slots=True)
 class LapRecord:
     session: SessionInfo
@@ -70,8 +75,7 @@ class LapRecord:
 
     @property
     def is_clean(self) -> bool:
-        """可以参与“最快圈”比较的圈。"""
-        return self.is_valid and self.is_complete and not self.is_out_lap and not self.is_in_lap
+        return is_clean_lap(self.is_valid, self.is_complete, self.is_out_lap, self.is_in_lap)
 
     @property
     def sample_count(self) -> int:

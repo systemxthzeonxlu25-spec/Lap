@@ -142,8 +142,8 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
                     await ws.send_json(snap)
                     last_seq, last_sent = snap.get("seq"), now
                 await asyncio.sleep(interval)
-        except Exception:      # 客户端断开时 send 会抛各种异常，安静结束即可
-            pass
+        except Exception as e:  # 客户端断开时 send 会抛各种异常，安静结束即可
+            log.debug("WebSocket 结束：%r", e)
         finally:
             watcher.cancel()
 

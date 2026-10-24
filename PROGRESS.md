@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（目前只有 sim 能真正采集，见“做到一半”）
-python -m pytest -q tests              # 11 个测试，全部通过
+python -m pytest -q                    # 29 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -27,13 +27,13 @@ python -m pytest -q tests              # 11 个测试，全部通过
 | `simtelemetry/live.py` | `LiveHub`：采集线程 → WebSocket 的最新快照 |
 | `simtelemetry/server.py` | FastAPI：`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
 | `simtelemetry/adapters/base.py` | 适配器统一接口 `GameAdapter`：`connect()` / `read()` / `close()` / `is_running()` |
-| `simtelemetry/adapters/__init__.py` | 适配器注册表 + 按进程名自动识别游戏 |
+| `simtelemetry/adapters/__init__.py` | 适配器注册表（`_REGISTRY`：游戏 → 模块/类）+ `is_implemented()` + 按进程名自动识别游戏。新增游戏：写模块、在 `_REGISTRY` 里已有占位，模块存在就自动生效 |
 | `simtelemetry/adapters/winshm.py` | 只读打开命名共享内存（OpenFileMappingW + MapViewOfFile + VirtualQuery），**不会创建**映射（原因见文件头注释） |
 | `simtelemetry/adapters/procs.py` | ctypes + Toolhelp32 列出进程名（不依赖 psutil） |
 | `simtelemetry/adapters/acc_structs.py` | ACC 三个页面的 ctypes 结构体（physics / graphics / static） |
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
 | `web/index.html`、`web/live.html` | **目前只是占位页**（见下文） |
-| `tests/` | `test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket） |
+| `tests/` | `simdrive.py`（测试共用的合成车手驱动）、`test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket）、`test_acc_layout.py`（ACC 结构体大小/偏移）、`test_robustness.py`（未实现游戏、存储/命令行参数） |
 
 ## 已完成
 
@@ -59,7 +59,7 @@ python -m pytest -q tests              # 11 个测试，全部通过
 
 ## 已知问题
 
-- `--game acc/ac/iracing` 目前会因为找不到适配器模块而报错；用 `--game auto` 时如果检测到这些游戏进程，采集线程会因同样的 ImportError 退出（`collector._candidates()` 里的 `create_adapter` 没包在 try 里）。没开游戏时不受影响。
+- `--game acc/ac/iracing` 目前会在启动时直接报“适配器还没有实现”；`--game auto` 检测到这些游戏时只打一条警告并跳过（以前采集线程会因 ImportError 退出，已修复）。
 - ACC 没有提供赛道长度（`trackSPlineLength` 实测为 0），对比图横轴只能用 %。可行办法：用参考圈的速度积分估算赛道长度。
 - ACC 的 `isValidLap` 在比赛 / hotstint 会话里压线后也常常保持 1（社区实测），这些会话的“有效”标记不可靠；需要靠官方广播 UDP 接口才能拿到准确值。
 - `steerAngle` 的正负方向（左转是正还是负）文档没写，需要实车记录确认；挡位编码 0=R/1=N/2=1 挡来自社区实测，不在文档里。
@@ -73,7 +73,7 @@ python -m pytest -q tests              # 11 个测试，全部通过
 - `#pragma pack(4)` 和映射名 `Local\acpmf_physics/graphics/static` **不在 PDF 里**，来自官方示例头文件 `SharedFileOut.h`（社区转载副本），并且多个独立实现都一致。
 - 与 6 个以上独立实现交叉核对过（PyAccSharedMemory、TinyPedal、CrewChief、gabbo76 等）。按文档计算的大小：physics 800、graphics 1588、static 820 字节。
   关键偏移：graphics `completedLaps` 132、`iCurrentTime` 140、`normalizedCarPosition` 248、`isInPitLane` 1236、`isValidLap` 1408；static `carModel` 68、`track` 134。
-  **还没写把这些大小和偏移固定下来的测试**（计划写 `tests/test_acc_layout.py`）。
+  这些大小和偏移已由 `tests/test_acc_layout.py` 固定下来。
 - 文档本身有歧义的地方：`trackConfiguration` 没写数组长度（按示例头文件取 [33]，代码里标了 TODO）；
   `currentMaxRpm` 和 `AllowTyreBlankets` 文档写 float、头文件写 int（都是 4 字节，不影响偏移）。
 - 社区实测的时序：跨线时 `iCurrentTime` 会比 `completedLaps` 早一帧或几帧归零；`iLastTime` 和圈数在同一帧更新；
