@@ -5,15 +5,17 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .analysis import compare_laps
 from .collector import Collector
 from .live import LiveHub
+from .setups.library import SetupLibrary
 from .storage import Storage
 
 log = logging.getLogger(__name__)
@@ -32,13 +34,17 @@ NO_CACHE = {"Cache-Control": "no-cache"}
 
 
 def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = None,
-               ws_hz: float = 20.0) -> FastAPI:
+               ws_hz: float = 20.0, setups: SetupLibrary | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if collector:
             collector.start()
+        if setups:
+            setups.start()
         yield
+        if setups:
+            await asyncio.to_thread(setups.stop)
         if collector:
             await asyncio.to_thread(collector.stop)
 
@@ -54,6 +60,10 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
     @app.get("/live", include_in_schema=False)
     def page_live():
         return FileResponse(WEB_DIR / "live.html", headers=NO_CACHE)
+
+    @app.get("/setups", include_in_schema=False)
+    def page_setups():
+        return FileResponse(WEB_DIR / "setups.html", headers=NO_CACHE)
 
     @app.get("/vendor/{name}", include_in_schema=False)
     def vendor(name: str):
@@ -108,6 +118,60 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
             raise HTTPException(404, "lap not found")
         return compare_laps(ref_lap, storage.get_samples(ref), cmp_lap, storage.get_samples(cmp),
                             points=points)
+
+    # ----------------------------------------------------------------- setups
+    def lib() -> SetupLibrary:
+        if setups is None:
+            raise HTTPException(404, "调教库没有启用")
+        return setups
+
+    @app.get("/api/setups")
+    def api_setups(game: str | None = None, car: str | None = None, track: str | None = None):
+        if setups is None:
+            return {"enabled": False, "roots": {}, "files": []}
+        return {"enabled": True, "roots": {g: str(p) for g, p in setups.roots.items()},
+                "files": setups.list_files(game, car, track)}
+
+    @app.post("/api/setups/scan")
+    async def api_setups_scan():
+        return await asyncio.to_thread(lib().scan)
+
+    @app.get("/api/setups/files/{file_id}")
+    def api_setup_file(file_id: int):
+        f = lib().get_file(file_id)
+        if not f:
+            raise HTTPException(404, "setup not found")
+        return f
+
+    @app.patch("/api/setups/files/{file_id}")
+    def api_setup_file_update(file_id: int, note: str | None = Body(None), tags: list[str] | None = Body(None)):
+        f = lib().update_file(file_id, note=note, tags=tags)
+        if not f:
+            raise HTTPException(404, "setup not found")
+        return f
+
+    @app.get("/api/setups/versions/{version_id}")
+    def api_setup_version(version_id: int):
+        v = lib().version_items(version_id)
+        if not v:
+            raise HTTPException(404, "version not found")
+        return v
+
+    @app.get("/api/setups/versions/{version_id}/raw")
+    def api_setup_version_raw(version_id: int):
+        """原始 JSON，用来自己备份 / 手动放回游戏目录。"""
+        v = lib().get_version(version_id)
+        if not v:
+            raise HTTPException(404, "version not found")
+        return Response(v["content"], media_type="application/json", headers={
+            "Content-Disposition": f'attachment; filename="{quote(v["name"])}.json"'})
+
+    @app.get("/api/setups/diff")
+    def api_setup_diff(a: int, b: int, derived: bool = False):
+        d = lib().diff(a, b, include_derived=derived)
+        if not d:
+            raise HTTPException(404, "version not found")
+        return d
 
     # --------------------------------------------------------------- realtime
     @app.websocket("/ws/live")

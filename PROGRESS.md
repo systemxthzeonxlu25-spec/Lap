@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（目前 sim、acc 已实现；acc 还没在真游戏上验证）
-python -m pytest -q                    # 47 个测试，全部通过（配置在 pyproject.toml）
+python -m pytest -q                    # 52 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -25,7 +25,7 @@ python -m pytest -q                    # 47 个测试，全部通过（配置在
 | `simtelemetry/analysis.py` | 按赛道距离对齐：t(d) 插值、多通道重采样（挡位用阶梯取值）、delta 曲线（正 = 对比圈更慢）、`LiveReference`（实时 delta，O(log n) 查询） |
 | `simtelemetry/collector.py` | 采集线程：约 50 Hz 循环，游戏没开时每 3 s 安静重试，数据停止更新时检查进程是否退出；单独的写库线程；新最快圈出现后自动更新实时参考圈 |
 | `simtelemetry/live.py` | `LiveHub`：采集线程 → WebSocket 的最新快照 |
-| `simtelemetry/server.py` | FastAPI：`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
+| `simtelemetry/server.py` | FastAPI：`/setups` 页、`/api/setups*`（列表、扫描、文件详情/备注标签、版本换算值、原始 JSON 下载、对比）、`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
 | `simtelemetry/adapters/base.py` | 适配器统一接口 `GameAdapter`：`connect()` / `read()` / `close()` / `is_running()` |
 | `simtelemetry/adapters/__init__.py` | 适配器注册表（`_REGISTRY`：游戏 → 模块/类）+ `is_implemented()` + 按进程名自动识别游戏。新增游戏：写模块、在 `_REGISTRY` 里已有占位，模块存在就自动生效 |
 | `simtelemetry/adapters/winshm.py` | 只读打开命名共享内存（OpenFileMappingW + MapViewOfFile + VirtualQuery），**不会创建**映射（原因见文件头注释） |
@@ -36,6 +36,8 @@ python -m pytest -q                    # 47 个测试，全部通过（配置在
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
 | `simtelemetry/setups/acc.py` | ACC 调教：`load_setup()` 解析 setup.json，`items()` 换算成游戏里显示的值（胎压 psi、刹车平衡 %、车高 mm…），`diff_setups()` 对比两份（默认跳过游戏算出来的派生值）。没登记的字段按原始值放进“其他”，不会丢 |
 | `simtelemetry/setups/acc_tables.py` | **自动生成，不要手改**。54 辆车的换算规则，移植自 Race Element（GPL-3） |
+| `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
+| `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
 | `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
 | `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
 | `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |
@@ -52,8 +54,9 @@ python -m pytest -q                    # 47 个测试，全部通过（配置在
 
 ## 做到一半
 
-0. **调教管理后续**：调教库（扫描 `Documents/Assetto Corsa Competizione/Setups`，文件变化时存快照到 SQLite，备注/标签）、
-   Web 页面、把调教和圈关联（会话开始时猜“最近改过的那份”，用户确认）。原则：只复制、不改不删游戏目录里的文件。
+0. **调教管理**：调教库 + 调教页已完成。还没做：把调教和圈关联（会话开始时猜“这辆车这条赛道最近改过的那份”，在面板上确认）、
+   “应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
+   数据库 `SCHEMA_VERSION` 现在是 2（只新增了两张表，旧库打开时自动补上）。
    已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
    ACC 的 MoTeC 导出（`.ld` + `.ldx`）可以导入：`.ld` 里的 `LAP_BEACON` 通道实测全是 0，切圈要读 `.ldx` 里的过线时间（微秒），
    参考 gotzl/acctelemetry；`SPEED` 通道看起来是 m/s（未确认）。

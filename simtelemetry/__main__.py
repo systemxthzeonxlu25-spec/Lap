@@ -17,6 +17,7 @@ from pathlib import Path
 from .adapters import GAMES, is_implemented
 from .collector import Collector
 from .live import LiveHub
+from .setups.library import SetupLibrary, default_acc_setups_dir
 from .storage import Storage
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "telemetry.db"
@@ -50,6 +51,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--sim-speed", type=float, default=1.0, help="--game sim 时的时间倍速")
     p.add_argument("--no-collect", action="store_true", help="不采集，只提供网页")
     p.add_argument("--no-web", action="store_true", help="只采集，不提供网页")
+    p.add_argument("--acc-setups", metavar="DIR",
+                   help="ACC 调教目录（默认自动找“文档/Assetto Corsa Competizione/Setups”）")
+    p.add_argument("--no-setups", action="store_true", help="不扫描调教目录")
     p.add_argument("--log-level", default="INFO", type=str.upper,
                    choices=("DEBUG", "INFO", "WARNING", "ERROR"))
     args = p.parse_args(argv)
@@ -86,7 +90,16 @@ def main(argv: list[str] | None = None) -> None:
 
     from .server import create_app
 
-    app = create_app(storage, hub, collector, ws_hz=args.ws_hz)
+    setups = None
+    if not args.no_setups:
+        acc_dir = Path(args.acc_setups) if args.acc_setups else default_acc_setups_dir()
+        if acc_dir is not None:
+            log.info("调教库：扫描 %s（只读）", acc_dir)
+            setups = SetupLibrary(storage, {"acc": acc_dir})
+        else:
+            log.info("调教库：没找到 ACC 调教目录，可以用 --acc-setups 指定")
+
+    app = create_app(storage, hub, collector, ws_hz=args.ws_hz, setups=setups)
     log.info("圈对比：http://127.0.0.1:%d/   实时面板：http://127.0.0.1:%d/live", args.port, args.port)
     if args.host in ("0.0.0.0", "::"):
         for ip in lan_addresses():

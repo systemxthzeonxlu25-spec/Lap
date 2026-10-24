@@ -12,7 +12,7 @@ from typing import Iterator
 
 from .models import SAMPLE_CHANNELS, LapRecord, is_clean_lap
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2          # 2：加了调教库（setup_files / setup_versions）；只新增表，旧库打开时自动补上
 
 # “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
@@ -53,6 +53,32 @@ CREATE TABLE IF NOT EXISTS samples (
     valid     INTEGER NOT NULL,
     PRIMARY KEY (lap_id, idx)
 ) WITHOUT ROWID;
+
+-- 调教库：游戏目录里的每个调教文件一行；内容每变一次存一个版本（只读游戏目录，从不写回）
+CREATE TABLE IF NOT EXISTS setup_files (
+    id          INTEGER PRIMARY KEY,
+    game        TEXT    NOT NULL,
+    rel_path    TEXT    NOT NULL,         -- 相对调教根目录，如 ferrari_296_gt3/monza/q1.json
+    car         TEXT    NOT NULL,
+    track       TEXT    NOT NULL,
+    name        TEXT    NOT NULL,         -- 文件名（不含扩展名）
+    note        TEXT    NOT NULL DEFAULT '',
+    tags        TEXT    NOT NULL DEFAULT '[]',   -- JSON 数组
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    missing     INTEGER NOT NULL DEFAULT 0,      -- 游戏目录里已经没有这个文件了（历史版本仍保留）
+    UNIQUE (game, rel_path)
+);
+
+CREATE TABLE IF NOT EXISTS setup_versions (
+    id          INTEGER PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES setup_files (id) ON DELETE CASCADE,
+    sha256      TEXT    NOT NULL,
+    content     TEXT    NOT NULL,
+    file_mtime  TEXT    NOT NULL,         -- 文件修改时间（ISO-8601 UTC）
+    captured_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_setup_versions_file ON setup_versions (file_id, id);
 """
 
 _LAP_COLUMNS = (
@@ -76,7 +102,7 @@ class Storage:
             # 每次操作都新开连接，内存库每次都是空的，表建完就没了
             raise ValueError("Storage 需要一个文件路径（测试请用临时目录下的文件）")
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self._conn() as con:
+        with self.connection() as con:
             version = con.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
                 raise RuntimeError(f"数据库 {self.path} 的结构版本是 {version}，比本程序支持的 "
@@ -86,7 +112,7 @@ class Storage:
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
-    def _conn(self) -> Iterator[sqlite3.Connection]:
+    def connection(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path, timeout=10)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA foreign_keys = ON")
@@ -101,7 +127,7 @@ class Storage:
     def save_lap(self, rec: LapRecord) -> int:
         s = rec.session
         n = rec.sample_count
-        with self._conn() as con:
+        with self.connection() as con:
             cur = con.execute(
                 "INSERT INTO laps (game, track, car, session_type, session_uid, lap_number, "
                 "lap_time_ms, time_source, is_valid, is_out_lap, is_in_lap, is_complete, "
@@ -122,12 +148,12 @@ class Storage:
         return lap_id
 
     def delete_lap(self, lap_id: int) -> bool:
-        with self._conn() as con:
+        with self.connection() as con:
             return con.execute("DELETE FROM laps WHERE id = ?", (lap_id,)).rowcount > 0
 
     # ------------------------------------------------------------------- read
     def list_combos(self) -> list[dict]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"""SELECT game, track, car,
                           COUNT(*) AS laps,
@@ -139,7 +165,7 @@ class Storage:
         return [dict(r) for r in rows]
 
     def list_laps(self, game: str, track: str, car: str) -> list[dict]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"SELECT {_LAP_COLUMNS} FROM laps WHERE game = ? AND track = ? AND car = ? "
                 "ORDER BY recorded_at DESC, id DESC",
@@ -148,12 +174,12 @@ class Storage:
         return [_lap_row_to_dict(r) for r in rows]
 
     def get_lap(self, lap_id: int) -> dict | None:
-        with self._conn() as con:
+        with self.connection() as con:
             row = con.execute(f"SELECT {_LAP_COLUMNS} FROM laps WHERE id = ?", (lap_id,)).fetchone()
         return _lap_row_to_dict(row) if row else None
 
     def get_samples(self, lap_id: int) -> dict[str, list]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"SELECT {', '.join(SAMPLE_CHANNELS)} FROM samples WHERE lap_id = ? ORDER BY idx",
                 (lap_id,),
@@ -162,7 +188,7 @@ class Storage:
         return {c: list(v) for c, v in zip(SAMPLE_CHANNELS, cols)}
 
     def best_lap(self, game: str, track: str, car: str) -> dict | None:
-        with self._conn() as con:
+        with self.connection() as con:
             row = con.execute(
                 f"SELECT {_LAP_COLUMNS} FROM laps WHERE game = ? AND track = ? AND car = ? "
                 f"AND {CLEAN_SQL} ORDER BY lap_time_ms, id LIMIT 1",
