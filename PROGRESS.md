@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（目前 sim、acc 已实现；acc 还没在真游戏上验证）
-python -m pytest -q                    # 52 个测试，全部通过（配置在 pyproject.toml）
+python -m pytest -q                    # 59 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -38,6 +38,7 @@ python -m pytest -q                    # 52 个测试，全部通过（配置在
 | `simtelemetry/setups/acc_tables.py` | **自动生成，不要手改**。54 辆车的换算规则，移植自 Race Element（GPL-3） |
 | `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
 | `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
+| `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
 | `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
 | `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
 | `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |
@@ -54,13 +55,6 @@ python -m pytest -q                    # 52 个测试，全部通过（配置在
 
 ## 做到一半
 
-0. **调教管理**：调教库 + 调教页已完成。还没做：把调教和圈关联（会话开始时猜“这辆车这条赛道最近改过的那份”，在面板上确认）、
-   “应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
-   数据库 `SCHEMA_VERSION` 现在是 2（只新增了两张表，旧库打开时自动补上）。
-   已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
-   ACC 的 MoTeC 导出（`.ld` + `.ldx`）可以导入：`.ld` 里的 `LAP_BEACON` 通道实测全是 0，切圈要读 `.ldx` 里的过线时间（微秒），
-   参考 gotzl/acctelemetry；`SPEED` 通道看起来是 m/s（未确认）。
-
 1. **ACC 适配器已写完，但还没在真游戏上跑过。** Linux 上用假页面测了整条链路（结构体 → 切圈 → 标记 → 圈时取自游戏）。
    需要在 Windows 上确认：① `python tools/fake_acc.py` + `python -m simtelemetry --game acc` 端到端能切圈；
    ② 真 ACC 里挡位、方向盘左右、进出站标记是否正确。
@@ -72,8 +66,21 @@ python -m pytest -q                    # 52 个测试，全部通过（配置在
    - 实时面板 `web/live.html`：始终深色；delta 大字 + 居中 ±2 s 条（灰色 = 出站/进站等仅供参考）；挡位、速度、本圈、预测、上一圈、转速、油门/刹车条；
      存下一圈时弹提示；WebSocket 断线指数退避重连，5 s 没消息视为断线；手机横放时左右分栏。
    - uPlot 默认从 jsDelivr 加载（`/vendor/*` 307 跳转）；离线使用可把 `uPlot.iife.min.js`、`uPlot.min.css`（1.6.32）放进 `web/vendor/`。
-3. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。
-4. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
+3. **调教管理**：调教库 + 调教页已完成。还没做：把调教和圈关联（会话开始时猜“这辆车这条赛道最近改过的那份”，在面板上确认）、
+   “应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
+   数据库 `SCHEMA_VERSION` 现在是 2（只新增了两张表，旧库打开时自动补上）。
+   已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
+4. **MoTeC 导入已做（命令行）**，用你发的 COTA 文件实测：SPEED 是 m/s（acctelemetry 也按 m/s 处理）、THROTTLE/BRAKE 0..100、
+   STEERANGLE 是方向盘角度（按 Race Element 的转向锁止角归一化）、GEAR 0 = N、`LAP_BEACON` 全是 0。
+   `TIME` 是本圈时间、过线归零，没有 `.ldx` 时靠它切圈（误差 ~20 ms），但实测有一次过线没归零、两圈连成一段 →
+   按“距离和其它圈中位数差 > 3% = 不完整”“停车 > 3 s = 进站圈”过滤。**还没拿到真实 `.ldx` 样本**，解析按 acctelemetry 的读法写的。
+   **已知限制**：MoTeC 里没有赛道位置通道，位置靠速度积分，两圈之间会错开几十米，对比图在刹车点上 delta 会出现尖刺；
+   可以考虑用弯心（速度极小值）分段对齐来修正。实时采集的圈用游戏给的位置，不受影响。还没有网页上传入口。
+5. **LMU 适配器没开始**（作者自己主要玩 ACC 和 LMU，优先级高于 AC / iRacing）。初步调研：新版本工具（LMU Pitwall、TinyPedal）读游戏自带的
+   `LMU_Data` 共享内存（需在游戏设置里打开 “Enable Plugins”），老教程用 rF2SharedMemoryMapPlugin；两者布局不同，`LMU_Data` 的布局还没找到官方文档，
+   开工前要交叉核对开源实现并把结论存进仓库。rF2 系会直接给赛道长度（米）。
+6. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。（给社区做的，排在 LMU 后面）
+7. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
 
 ## 已知问题
 

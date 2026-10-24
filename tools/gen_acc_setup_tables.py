@@ -244,8 +244,15 @@ def factory_maps(root: Path):
     return conv, names, parse
 
 
+def steering_locks(root: Path) -> dict[str, int]:
+    """Race_Element.Data.ACC/Cars/SteeringLock.cs：车型 → 方向盘总转角（度，左右满舵之和）。"""
+    src = strip_comments((root / "Race_Element.Data.ACC" / "Cars" / "SteeringLock.cs").read_text(encoding="utf-8-sig"))
+    return {k: int(v) for k, v in re.findall(r'\{\s*"([^"]+)"\s*,\s*(\d+)\s*\}', src)}
+
+
 def main(root: Path) -> None:
     classes = car_classes(root)
+    locks = steering_locks(root)
     conv, names, parse = factory_maps(root)
     cars = {}
     for car_name, model in sorted(parse.items()):
@@ -254,7 +261,7 @@ def main(root: Path) -> None:
             print(f"跳过 {car_name}（{model}）：Race Element 里没有它的换算", file=sys.stderr)
             continue
         cars[car_name] = {"name": names.get(model, car_name), "class": classes[cls]["class"],
-                          **dict(sorted(classes[cls]["rules"].items()))}
+                          "steer_lock": locks.get(car_name), **dict(sorted(classes[cls]["rules"].items()))}
     try:
         commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
                                 text=True, check=True).stdout.strip()
@@ -263,9 +270,9 @@ def main(root: Path) -> None:
     header = f'''"""ACC 调教换算表。由 tools/gen_acc_setup_tables.py 自动生成，不要手改。
 
 数据移植自 Race Element（https://github.com/RiddleTime/race-element，GPL-3.0），
-Race_Element.Data.ACC/SetupParser/Cars/，提交 {commit}。
+Race_Element.Data.ACC/SetupParser/Cars/ 和 Cars/SteeringLock.cs，提交 {commit}。
 Race Element 的作者与贡献者保留其著作权；本文件按 GPL-3.0-or-later 随本项目发布。
-规则格式见生成脚本的文档字符串。
+规则格式见生成脚本的文档字符串；steer_lock 是方向盘总转角（度）。
 """
 # SPDX-License-Identifier: GPL-3.0-or-later
 # flake8: noqa

@@ -185,6 +185,7 @@ function renderLaps() {
     if (!lap.is_valid) flags.push(["无效", true]);
     if (!lap.is_complete) flags.push(["不完整", true]);
     if (lap.time_source === "estimated") flags.push(["估算圈时", false]);
+    if (lap.session_type === "motec") flags.push(["MoTeC 导入", false]);
     tr.innerHTML = `
       <td class="pick"><input type="radio" name="ref" aria-label="设为参考圈" ${lap.id === state.ref ? "checked" : ""} ${lap.id === state.cmp ? "disabled" : ""}></td>
       <td class="pick"><input type="radio" name="cmp" aria-label="设为对比圈" ${lap.id === state.cmp ? "checked" : ""} ${lap.id === state.ref ? "disabled" : ""}></td>

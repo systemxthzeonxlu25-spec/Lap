@@ -14,6 +14,12 @@ python -m pytest -q
 python -m simtelemetry.setups diff a.json b.json
 ```
 
+导入 ACC 导出的 MoTeC 文件（调教里把 “MoTeC 导出圈数” 设成 > 0）：
+
+```bash
+python -m simtelemetry.motec "文档/Assetto Corsa Competizione/MoTeC/xxx.ld"
+```
+
 打开 `http://127.0.0.1:8000/`（圈对比）或 `/live`（实时面板）。
 
 目前 `sim` 和 `acc` 能采集（ACC 还没在真游戏上验证），LMU / AC / iRacing 还在做。架构、进度和已知问题见 [PROGRESS.md](PROGRESS.md)。
@@ -22,4 +28,4 @@ python -m simtelemetry.setups diff a.json b.json
 
 GPL-3.0-or-later，见 [LICENSE](LICENSE)。选 GPL 是为了能参考同为 GPL-3 的 ACC 社区项目
 （`simtelemetry/setups/acc_tables.py` 的调教换算表移植自 [Race Element](https://github.com/RiddleTime/race-element)；
-以后的 MoTeC 解析会参考 gotzl/ldparser）；基于本项目的修改版发布时同样需要开源。
+`simtelemetry/motec.py` 的 MoTeC 解析移植自 [gotzl/ldparser](https://github.com/gotzl/ldparser)）；基于本项目的修改版发布时同样需要开源。

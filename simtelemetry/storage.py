@@ -12,6 +12,8 @@ from typing import Iterator
 
 from .models import SAMPLE_CHANNELS, LapRecord, is_clean_lap
 
+DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "telemetry.db"
+
 SCHEMA_VERSION = 2          # 2：加了调教库（setup_files / setup_versions）；只新增表，旧库打开时自动补上
 
 # “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
@@ -146,6 +148,10 @@ class Storage:
                 ((lap_id, i, *row) for i, row in enumerate(zip(*cols))),
             )
         return lap_id
+
+    def has_session(self, session_uid: str) -> bool:
+        with self.connection() as con:
+            return con.execute("SELECT 1 FROM laps WHERE session_uid = ? LIMIT 1", (session_uid,)).fetchone() is not None
 
     def delete_lap(self, lap_id: int) -> bool:
         with self.connection() as con:

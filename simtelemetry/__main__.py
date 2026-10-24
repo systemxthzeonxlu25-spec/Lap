@@ -18,9 +18,7 @@ from .adapters import GAMES, is_implemented
 from .collector import Collector
 from .live import LiveHub
 from .setups.library import SetupLibrary, default_acc_setups_dir
-from .storage import Storage
-
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "telemetry.db"
+from .storage import DEFAULT_DB, Storage
 
 
 def lan_addresses() -> list[str]:
