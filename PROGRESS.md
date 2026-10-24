@@ -32,6 +32,10 @@ python -m pytest -q                    # 29 个测试，全部通过（配置在
 | `simtelemetry/adapters/procs.py` | ctypes + Toolhelp32 列出进程名（不依赖 psutil） |
 | `simtelemetry/adapters/acc_structs.py` | ACC 三个页面的 ctypes 结构体（physics / graphics / static） |
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
+| `simtelemetry/setups/acc.py` | ACC 调教：`load_setup()` 解析 setup.json，`items()` 换算成游戏里显示的值（胎压 psi、刹车平衡 %、车高 mm…），`diff_setups()` 对比两份（默认跳过游戏算出来的派生值）。没登记的字段按原始值放进“其他”，不会丢 |
+| `simtelemetry/setups/acc_tables.py` | **自动生成，不要手改**。54 辆车的换算规则，移植自 Race Element（GPL-3） |
+| `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
+| `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
 | `web/index.html`、`web/live.html` | **目前只是占位页**（见下文） |
 | `tests/` | `simdrive.py`（测试共用的合成车手驱动）、`test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket）、`test_acc_layout.py`（ACC 结构体大小/偏移）、`test_robustness.py`（未实现游戏、存储/命令行参数） |
 
@@ -42,7 +46,15 @@ python -m pytest -q                    # 29 个测试，全部通过（配置在
 - **阶段 3 后端**：WebSocket 推送实时快照（速度、挡位、转速、油门/刹车、本圈时间、实时 delta、预测圈时、最近保存的圈），无变化时每 2 s 发一次心跳。
 - ACC 结构体定义已写好（逐字段对照官方文档）。
 
+- **调教（ACC）第一步**：换算表 + 解析 + 对比 + 命令行。已用真实调教文件核对过 296 GT3 的换算。
+
 ## 做到一半
+
+0. **调教管理后续**：调教库（扫描 `Documents/Assetto Corsa Competizione/Setups`，文件变化时存快照到 SQLite，备注/标签）、
+   Web 页面、把调教和圈关联（会话开始时猜“最近改过的那份”，用户确认）。原则：只复制、不改不删游戏目录里的文件。
+   已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
+   ACC 的 MoTeC 导出（`.ld` + `.ldx`）可以导入：`.ld` 里的 `LAP_BEACON` 通道实测全是 0，切圈要读 `.ldx` 里的过线时间（微秒），
+   参考 gotzl/acctelemetry；`SPEED` 通道看起来是 m/s（未确认）。
 
 1. **ACC 适配器 `adapters/acc.py` 还没写。** `acc_structs.py` 已就绪。计划中的映射关系：
    `speedKmh`、`gas`、`brake`、`steerAngle`、`gear - 1`、`rpms`、`completedLaps`、`iCurrentTime`、
