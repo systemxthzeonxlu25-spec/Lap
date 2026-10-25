@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -15,12 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from .analysis import compare_laps
 from .collector import Collector
 from .live import LiveHub
+from .paths import RESOURCE_ROOT
 from .setups.library import SetupLibrary
 from .storage import Storage
 
 log = logging.getLogger(__name__)
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = RESOURCE_ROOT / "web"
 VENDOR_DIR = WEB_DIR / "vendor"
 
 # 前端图表库。web/vendor/ 里有本地文件就用本地的（离线可用），否则跳转到 CDN。

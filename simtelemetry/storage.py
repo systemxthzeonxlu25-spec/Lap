@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Iterator
 
 from .models import SAMPLE_CHANNELS, LapRecord, is_clean_lap
+from .paths import DATA_ROOT
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "telemetry.db"
+DEFAULT_DB = DATA_ROOT / "data" / "telemetry.db"
 
 SCHEMA_VERSION = 2          # 2：加了调教库（setup_files / setup_versions）；只新增表，旧库打开时自动补上
 

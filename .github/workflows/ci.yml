@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试（${{ matrix.os }} / Python ${{ matrix.python }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      # Windows 上 tests/test_windows_shm.py 会真的创建 ACC / LMU 同名共享内存，走完整的读取 → 切圈路径
+      - run: python -m pytest -q -ra
+
+  exe:
+    name: 打包 Windows exe
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt "pyinstaller>=6.10,<7"
+      - name: 下载 uPlot 1.6.32 打进 exe（离线也能用）
+        shell: bash
+        run: |
+          mkdir -p web/vendor && cd web/vendor
+          npm pack uplot@1.6.32
+          tar xzf uplot-1.6.32.tgz
+          cp package/dist/uPlot.iife.min.js package/dist/uPlot.min.css package/LICENSE .
+          mv LICENSE uPlot.LICENSE
+          rm -rf package uplot-1.6.32.tgz
+      - name: PyInstaller
+        run: >-
+          pyinstaller --noconfirm --onefile --name Lap
+          --add-data "web;web" --add-data "LICENSE;."
+          --collect-submodules simtelemetry --collect-submodules uvicorn
+          packaging/lap_main.py
+      - name: 冒烟测试：exe 能启动、网页和接口能访问
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\Lap.exe -ArgumentList "--game","sim","--port","8765","--db","$env:RUNNER_TEMP\smoke.db","--no-setups" -PassThru -RedirectStandardError "$env:RUNNER_TEMP\err.log"
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try { $r = Invoke-RestMethod http://127.0.0.1:8765/api/status; if ($r.collector.connected) { $ok = $true; break } } catch {}
+          }
+          $pages = @("/", "/live", "/setups", "/static/app.css", "/vendor/uPlot.iife.min.js") | ForEach-Object {
+            (Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 "http://127.0.0.1:8765$_").StatusCode
+          }
+          Stop-Process -Id $p.Id -Force
+          Get-Content "$env:RUNNER_TEMP\err.log" -Tail 20
+          if (-not $ok) { throw "exe 没有正常启动采集" }
+          if ($pages | Where-Object { $_ -ne 200 }) { throw "页面状态码：$pages" }
+          "页面状态码：$pages"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lap-windows
+          path: dist/Lap.exe
+          retention-days: 30

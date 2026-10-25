@@ -32,3 +32,8 @@ web/vendor/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# PyInstaller
+build/
+dist/
+*.spec
