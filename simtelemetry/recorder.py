@@ -118,6 +118,10 @@ class LapRecorder:
         self._last_lap_count = None
         self._last_tick = None
         self._last_last_lap_ms = None
+        if self.session is not None:
+            # 断开重连 / 圈数归零后接着采的圈算新会话（调教关联按会话算）；
+            # feed() 第一帧走的是“还没有圈数”的分支，不会再换，所以在这里换
+            self.session_uid = uuid.uuid4().hex[:12]
         return done
 
     def feed(self, session: SessionInfo, f: TelemetryFrame, wall: float) -> list[LapRecord]:
@@ -144,8 +148,7 @@ class LapRecorder:
             self._close_lap(f, wall)
             self._start_lap(lc, wall)
         elif lc != self._last_lap_count:
-            out += self.reset(f"圈数从 {self._last_lap_count} 变为 {lc}")
-            self.session_uid = uuid.uuid4().hex[:12]        # 重开 / 新会话：和之前的圈分开（调教关联按会话算）
+            out += self.reset(f"圈数从 {self._last_lap_count} 变为 {lc}")     # reset 会换新的 session_uid
             self._start_lap(lc, wall)
         elif self._buf is not None and len(self._buf) > 0 and \
                 f.lap_time_ms < self._buf.last_t_ms - LAP_TIME_RESET_MS:

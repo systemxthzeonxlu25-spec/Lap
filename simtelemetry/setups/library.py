@@ -152,16 +152,22 @@ class SetupLibrary:
             except (OSError, ValueError):
                 continue
             mtime = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(timespec="seconds")
-            self._record(game, rel, car or setup.car, track, path.stem, text, mtime, counts)
+            self._record(game, rel, car or setup.car, track, path.stem, text, raw, mtime, counts)
             self._seen[path] = sig
         self._mark_missing(game, present, counts)
 
-    def _record(self, game: str, rel: str, car: str, track: str, name: str, text: str, mtime: str,
+    def _record(self, game: str, rel: str, car: str, track: str, name: str, text: str, raw: bytes, mtime: str,
                 counts: dict[str, int]) -> None:
         sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
         now = _now()
         with self.storage.connection() as con:
-            row = con.execute("SELECT id FROM setup_files WHERE game = ? AND rel_path = ?", (game, rel)).fetchone()
+            row = con.execute("SELECT id, car FROM setup_files WHERE game = ? AND rel_path = ?", (game, rel)).fetchone()
+            if row is not None and row["car"] != car:
+                # 同一路径被换成了另一辆车的调教（LMU 的车型写在文件里）：旧记录连同历史版本改名归档，
+                # 新内容另起一条，免得旧版本被挂到新车型名下
+                con.execute("UPDATE setup_files SET rel_path = rel_path || ?, missing = 1 WHERE id = ?",
+                            (f"#replaced-{row['id']}", row["id"]))
+                row = None
             if row is None:
                 file_id = con.execute(
                     "INSERT INTO setup_files (game, rel_path, car, track, name, first_seen, last_seen) "
@@ -169,14 +175,12 @@ class SetupLibrary:
                 counts["new_files"] += 1
             else:
                 file_id = row["id"]
-                # 同一路径的文件可能被换成另一辆车的调教（LMU 的车型写在文件里）：身份跟着最新内容走
-                con.execute("UPDATE setup_files SET last_seen = ?, missing = 0, car = ?, track = ? WHERE id = ?",
-                            (now, car, track, file_id))
+                con.execute("UPDATE setup_files SET last_seen = ?, missing = 0 WHERE id = ?", (now, file_id))
             last = con.execute("SELECT sha256 FROM setup_versions WHERE file_id = ? ORDER BY id DESC LIMIT 1",
                                (file_id,)).fetchone()
             if last is None or last["sha256"] != sha:
-                con.execute("INSERT INTO setup_versions (file_id, sha256, content, file_mtime, captured_at) "
-                            "VALUES (?, ?, ?, ?, ?)", (file_id, sha, text, mtime, now))
+                con.execute("INSERT INTO setup_versions (file_id, sha256, content, raw, file_mtime, captured_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (file_id, sha, text, raw, mtime, now))
                 counts["new_versions"] += 1
 
     def _mark_missing(self, game: str, present: set[str], counts: dict[str, int]) -> None:

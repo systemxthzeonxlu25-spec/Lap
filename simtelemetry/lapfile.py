@@ -82,7 +82,7 @@ def parse_lap_file(data: bytes) -> tuple[LapRecord, str]:
     if length is not None:
         try:
             length = float(length)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError("圈文件里的赛道长度不是数字") from None
         if not (math.isfinite(length) and length > 0):
             raise ValueError("圈文件里的赛道长度不对")

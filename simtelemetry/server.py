@@ -225,8 +225,12 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
         v = lib().get_version(version_id)
         if not v:
             raise HTTPException(404, "version not found")
-        ext, media = (".svm", "text/plain; charset=utf-8") if v["game"] == "lmu" else (".json", "application/json")
-        return Response(v["content"], media_type=media, headers={
+        if v["raw"] is not None:            # 原样返回游戏写的字节（LMU 不一定是 UTF-8，所以不标 text/*）
+            body, media = v["raw"], "application/octet-stream" if v["game"] == "lmu" else "application/json"
+        else:                               # v0.1.1 之前存的版本只有解码后的文本
+            body, media = v["content"], "text/plain; charset=utf-8" if v["game"] == "lmu" else "application/json"
+        ext = ".svm" if v["game"] == "lmu" else ".json"
+        return Response(body, media_type=media, headers={
             "Content-Disposition": f'attachment; filename="{quote(v["name"])}{ext}"'})
 
     @app.get("/api/setups/diff")
