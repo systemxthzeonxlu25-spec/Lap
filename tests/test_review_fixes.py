@@ -54,7 +54,7 @@ def test_lap_counter_reset_starts_new_session_uid():
     assert rec.session_uid != first
 
 
-@pytest.mark.parametrize("bad", ["4.2km", float("nan"), -5, 0])
+@pytest.mark.parametrize("bad", ["4.2km", float("nan"), -5, 0, True])
 def test_imported_track_length_must_be_positive_number(tmp_path, bad):
     s = Storage(tmp_path / "t.db")
     lap_id = s.save_lap(drive(200)[0])
@@ -162,3 +162,23 @@ def test_imported_lap_with_wrong_container_types_is_rejected(tmp_path, field, va
         doc[field] = list(_LAP_FIELDS if value == "LAP_FIELDS" else SAMPLE_CHANNELS)
     with pytest.raises(ValueError):
         parse_lap_file(gzip.compress(json.dumps(doc).encode()))
+
+
+@pytest.mark.parametrize("value", ["fast", None, [1], 10 ** 400])
+def test_imported_samples_must_be_numbers(tmp_path, value):
+    s = Storage(tmp_path / "t.db")
+    lap_id = s.save_lap(drive(200)[0])
+    doc = json.loads(gzip.decompress(export_lap(s, lap_id)))
+    doc["samples"]["speed"][5] = value
+    with pytest.raises(ValueError, match="speed"):
+        parse_lap_file(gzip.compress(json.dumps(doc).encode()))
+
+
+def test_imported_lap_time_overflow_is_rejected(tmp_path):
+    s = Storage(tmp_path / "t.db")
+    lap_id = s.save_lap(drive(200)[0])
+    raw = gzip.decompress(export_lap(s, lap_id))
+    doc = json.loads(raw)
+    raw = raw.replace(f'"lap_time_ms":{doc["lap"]["lap_time_ms"]}'.encode(), b'"lap_time_ms":1e400')   # → inf
+    with pytest.raises(ValueError):
+        parse_lap_file(gzip.compress(raw))
