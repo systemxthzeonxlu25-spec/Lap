@@ -27,7 +27,7 @@ python -m simtelemetry.lapfile export 圈ID --note "车手名"
 python -m simtelemetry.lapfile import xxx.lap.gz
 ```
 
-Windows 用户也可以直接下载 CI 打包的 `Lap.exe`（GitHub Actions → 最新一次 CI → Artifacts → Lap-windows），双击运行，数据存在 exe 旁边的 `data/`。
+Windows 用户可以直接到 [Releases](../../releases) 下载 `Lap-<版本>-windows-x64.exe`，双击运行，数据存在 exe 旁边的 `data/`（每次 CI 打包的测试版在 Actions → Artifacts → Lap-windows）。
 
 切圈不对、想反馈问题时，录一段原始数据（文件里有赛道/车型，`--record-raw` 时还有玩家名/服务器名，不会上传，发给别人前请自己确认）：
 

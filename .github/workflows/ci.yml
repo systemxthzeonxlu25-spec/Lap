@@ -5,6 +5,7 @@ on:
     branches: [main, "claude/**"]
   pull_request:
   workflow_dispatch:
+  workflow_call:          # release.yml 发布前先跑一遍完整 CI，并复用这里打包的 exe（artifact：Lap-windows）
 
 permissions:
   contents: read
