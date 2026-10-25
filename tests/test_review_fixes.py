@@ -132,3 +132,33 @@ def test_imported_track_length_too_large_is_rejected(tmp_path):
     doc["lap"]["track_length_m"] = 10 ** 400
     with pytest.raises(ValueError, match="赛道长度"):
         parse_lap_file(gzip.compress(json.dumps(doc).encode()))
+
+
+def test_lmu_reencoded_file_updates_raw_without_new_version(tmp_path):
+    root = tmp_path / "Settings"
+    f = root / "Spa" / "q.svm"
+    f.parent.mkdir(parents=True)
+    base = SVM.encode("ascii", errors="replace")                          # 只留 Café 一处非 ASCII
+    f.write_bytes(base + "// Café\r\n".encode("utf-8"))
+    lib = SetupLibrary(Storage(tmp_path / "t.db"), {"lmu": root})
+    lib.scan()
+    f.write_bytes(base + "// Café\r\n".encode("cp1252"))   # 文字一样，编码变了
+    lib.scan()
+    (row,) = lib.list_files("lmu")
+    assert row["versions"] == 1
+    assert lib.get_version(row["latest_version_id"])["raw"] == f.read_bytes()
+
+
+@pytest.mark.parametrize("field,value", [("lap", "LAP_FIELDS"), ("samples", "CHANNELS"), ("samples", "INT")])
+def test_imported_lap_with_wrong_container_types_is_rejected(tmp_path, field, value):
+    from simtelemetry.lapfile import _LAP_FIELDS
+    from simtelemetry.models import SAMPLE_CHANNELS
+    s = Storage(tmp_path / "t.db")
+    lap_id = s.save_lap(drive(200)[0])
+    doc = json.loads(gzip.decompress(export_lap(s, lap_id)))
+    if value == "INT":
+        doc["samples"]["speed_kmh" if "speed_kmh" in SAMPLE_CHANNELS else SAMPLE_CHANNELS[1]] = 5
+    else:
+        doc[field] = list(_LAP_FIELDS if value == "LAP_FIELDS" else SAMPLE_CHANNELS)
+    with pytest.raises(ValueError):
+        parse_lap_file(gzip.compress(json.dumps(doc).encode()))

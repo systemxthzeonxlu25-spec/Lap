@@ -176,9 +176,12 @@ class SetupLibrary:
             else:
                 file_id = row["id"]
                 con.execute("UPDATE setup_files SET last_seen = ?, missing = 0 WHERE id = ?", (now, file_id))
-            last = con.execute("SELECT sha256 FROM setup_versions WHERE file_id = ? ORDER BY id DESC LIMIT 1",
+            last = con.execute("SELECT id, sha256, raw FROM setup_versions WHERE file_id = ? ORDER BY id DESC LIMIT 1",
                                (file_id,)).fetchone()
-            if last is None or last["sha256"] != sha:
+            if last is not None and last["sha256"] == sha:
+                if last["raw"] != raw:      # 内容没变、只是编码 / BOM 变了：不算新版本，但下载要给当前的字节
+                    con.execute("UPDATE setup_versions SET raw = ? WHERE id = ?", (raw, last["id"]))
+            else:
                 con.execute("INSERT INTO setup_versions (file_id, sha256, content, raw, file_mtime, captured_at) "
                             "VALUES (?, ?, ?, ?, ?, ?)", (file_id, sha, text, raw, mtime, now))
                 counts["new_versions"] += 1

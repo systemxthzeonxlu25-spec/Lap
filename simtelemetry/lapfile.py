@@ -72,9 +72,13 @@ def parse_lap_file(data: bytes) -> tuple[LapRecord, str]:
     if doc.get("version") != VERSION:
         raise ValueError(f"圈文件版本 {doc.get('version')} 不支持（本程序支持 {VERSION}），请升级程序")
     lap, samples = doc.get("lap") or {}, doc.get("samples") or {}
+    if not isinstance(lap, dict) or not isinstance(samples, dict):
+        raise ValueError("圈文件结构不对")
     missing = [k for k in _LAP_FIELDS if k not in lap] + [c for c in SAMPLE_CHANNELS if c not in samples]
     if missing:
         raise ValueError(f"圈文件缺少字段：{', '.join(missing)}")
+    if not all(isinstance(samples[c], list) for c in SAMPLE_CHANNELS):
+        raise ValueError("采样点数据不完整")
     n = len(samples["t_ms"])
     if n < 2 or any(len(samples[c]) != n for c in SAMPLE_CHANNELS):
         raise ValueError("采样点数据不完整")
