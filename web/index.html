@@ -21,6 +21,16 @@
 .chart-title .hint { white-space: nowrap; }
 .u-select { background: var(--hover); }
 .uplot { font-family: inherit; }
+/* ---- corners */
+#corners-card .table-wrap { max-height: none; }
+#corners tr { cursor: pointer; }
+#corners tr:focus-visible { outline: 2px solid var(--axis); outline-offset: -2px; }
+#corners tr.sel { background: var(--hover); }
+#corners .sep { color: var(--muted); padding: 0 2px; }
+#corners td.slower { background: var(--slower-wash); }
+#corners td.faster { background: var(--faster-wash); }
+#corners-foot td { color: var(--text-2); border-bottom: none; }
+#corners-foot tr:last-child td { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -65,6 +75,29 @@
     <div class="readout" id="readout"></div>
     <div id="charts"></div>
   </section>
+
+  <section class="card" id="corners-card" hidden>
+    <div class="card-head">
+      <h2>弯道</h2>
+      <span class="hint" id="corners-hint"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>弯</th>
+          <th class="num" id="corners-pos-head">位置</th>
+          <th class="num">入弯速度</th>
+          <th class="num">最低速度</th>
+          <th class="num">出弯速度</th>
+          <th class="num" id="corners-brake-head">刹车点</th>
+          <th class="num" title="对比圈 − 参考圈，+ = 对比圈更慢">用时差</th>
+        </tr></thead>
+        <tbody id="corners"></tbody>
+        <tfoot id="corners-foot"></tfoot>
+      </table>
+    </div>
+    <div class="empty" id="corners-empty" hidden>参考圈的速度曲线里没有找到明显减速的弯。</div>
+  </section>
 </main>
 
 <script src="/vendor/uPlot.iife.min.js"></script>
@@ -73,7 +106,7 @@
 
 const GAME_NAMES = { sim: "模拟数据", acc: "ACC", ac: "AC", iracing: "iRacing", lmu: "LMU" };
 const $ = (id) => document.getElementById(id);
-const state = { combo: null, laps: [], bestId: null, ref: null, cmp: null, data: null, plots: [] };
+const state = { combo: null, laps: [], bestId: null, ref: null, cmp: null, data: null, plots: [], theo: null, corner: null };
 
 // ------------------------------------------------------------------ helpers
 function fmtLap(ms) {
@@ -144,10 +177,12 @@ function showLapsEmpty(text) {
   $("laps-empty").textContent = text;
   $("laps-empty").hidden = false;
   $("charts-card").hidden = true;
+  $("corners-card").hidden = true;
 }
 
 async function selectCombo(combo, fromUrl) {
   state.combo = combo;
+  state.theo = null;
   const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
   const r = await getJSON("/api/laps?" + q);
   state.laps = r.laps;
@@ -163,7 +198,18 @@ async function selectCombo(combo, fromUrl) {
     state.cmp = state.laps.find((l) => l.id !== state.ref)?.id ?? null;
   }
   renderLaps();
+  loadTheo(combo);
   await loadCompare();
+}
+
+// 理论最快圈：每段取各干净圈里最快的一段（后端在最快圈上按弯道分段）
+async function loadTheo(combo) {
+  const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
+  let theo = null;
+  try { theo = await getJSON("/api/theoretical_best?" + q); } catch (e) { /* 只是提示，失败就不显示 */ }
+  if (state.combo !== combo) return;
+  state.theo = theo;
+  renderLapsHint();
 }
 
 // ------------------------------------------------------------------ lap table
@@ -172,9 +218,7 @@ function renderLaps() {
   tbody.innerHTML = "";
   const best = state.laps.find((l) => l.id === state.bestId);
   $("laps-empty").hidden = true;
-  $("laps-hint").textContent = best
-    ? `${state.laps.length} 圈 · 最快干净圈 ${fmtLap(best.lap_time_ms)}`
-    : `${state.laps.length} 圈 · 还没有干净圈（有效、完整、非出站/进站）`;
+  renderLapsHint();
   if (!state.laps.length) { showLapsEmpty("这个组合下没有圈了。"); return; }
 
   for (const lap of state.laps) {
@@ -203,6 +247,19 @@ function renderLaps() {
   }
 }
 
+function renderLapsHint() {
+  const best = state.laps.find((l) => l.id === state.bestId), t = state.theo, el = $("laps-hint");
+  el.textContent = best
+    ? `${state.laps.length} 圈 · 最快干净圈 ${fmtLap(best.lap_time_ms)}`
+    : `${state.laps.length} 圈 · 还没有干净圈（有效、完整、非出站/进站）`;
+  el.title = "";
+  if (best && t && t.theoretical_ms != null && t.best_ms === best.lap_time_ms) {
+    el.textContent += ` · 理论最快圈 ${fmtLap(t.theoretical_ms)}` +
+      (t.gain_ms > 0 ? `，比最快圈快 ${(t.gain_ms / 1000).toFixed(3)} s` : "（就是最快圈）");
+    el.title = `把 ${t.laps} 个干净圈按弯道分成 ${t.segments.length} 段，每段取最快的那一圈再加起来（分段在最快圈上划分）`;
+  }
+}
+
 async function deleteLap(lap) {
   if (!confirm(`删除${lapLabel(lap)}？删除后不能恢复。`)) return;
   await fetch(`/api/laps/${lap.id}`, { method: "DELETE" });
@@ -216,6 +273,7 @@ async function loadCompare() {
   saveUrl();
   if (!state.ref || !state.cmp) {
     $("charts-card").hidden = true;
+    $("corners-card").hidden = true;
     destroyPlots();
     return;
   }
@@ -225,8 +283,10 @@ async function loadCompare() {
   if ([state.ref, state.cmp].join() !== want) return;     // 加载期间用户又换了圈
   state.data = data;
   $("charts-card").hidden = false;
+  state.corner = null;
   renderLegend();
   buildPlots();
+  renderCorners();
 }
 
 function renderLegend() {
@@ -335,7 +395,8 @@ function buildPlots() {
         { ...axisBase, size: 44, values: yValues[c.key], splits: ySplits[c.key] },
       ],
       series: [{}, ...ser],
-      hooks: { setCursor: [(u) => updateReadout(u.cursor.idx)] },
+      hooks: { setCursor: [(u) => updateReadout(u.cursor.idx)],
+               ...(c.key === "delta" ? { drawClear: [drawCornerBands], draw: [drawCornerLabels] } : {}) },
     };
     state.plots.push(new uPlot(opts, [x, ...ys], wrap));
   });
@@ -344,10 +405,107 @@ function buildPlots() {
     p.hooks.setScale = [(u, key) => {
       if (key !== "x") return;
       const { min, max } = u.scales.x;
+      if (state.corner && (min !== state.corner.zoom[0] || max !== state.corner.zoom[1])) clearCornerSel();   // 框选 / 双击改了范围
       for (const o of state.plots) if (o !== u && (o.scales.x.min !== min || o.scales.x.max !== max)) o.setScale("x", { min, max });
     }];
   }
   updateReadout(null);
+}
+
+// delta 图上淡淡地标出弯道段（底色）和弯名（顶部小字）
+function cornerSegs() { return (state.data?.corners?.segments || []).filter((s) => s.kind === "corner"); }
+function drawCornerBands(u) {
+  const ctx = u.ctx, { top, height } = u.bbox;
+  ctx.save();
+  ctx.fillStyle = css("--hover");
+  for (const s of cornerSegs()) {
+    const a = u.valToPos(s.start, "x", true), b = u.valToPos(s.end, "x", true);
+    ctx.fillRect(a, top, b - a, height);
+  }
+  ctx.restore();
+}
+function drawCornerLabels(u) {
+  const ctx = u.ctx, { left, top, width } = u.bbox, px = uPlot.pxRatio;
+  ctx.save();
+  ctx.fillStyle = css("--muted");
+  ctx.font = `${11 * px}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  let lastRight = -Infinity;
+  for (const s of cornerSegs()) {
+    const x = u.valToPos(s.apex, "x", true), w = ctx.measureText(s.name).width;
+    if (x < left || x > left + width || x - w / 2 < lastRight + 4 * px) continue;   // 太挤就跳过
+    ctx.fillText(s.name, x, top + 3 * px);
+    lastRight = x + w / 2;
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------------ corners
+function renderCorners() {
+  const d = state.data, ct = d.corners, xi = xInfo();
+  const segs = ct ? ct.segments : [];
+  const corners = segs.filter((s) => s.kind === "corner");
+  const tbody = $("corners"), foot = $("corners-foot");
+  tbody.innerHTML = ""; foot.innerHTML = "";
+  $("corners-card").hidden = false;
+  $("corners-empty").hidden = corners.length > 0;
+  $("corners-pos-head").textContent = xi.len ? "位置（m）" : "位置（%）";
+  $("corners-brake-head").textContent = xi.len ? "刹车点（m）" : "刹车点（%）";
+  $("corners-hint").textContent = corners.length
+    ? "每格：参考 · 对比；用时差 = 对比 − 参考（+ = 对比圈更慢）；点一行放大到该弯"
+    : "";
+  const p = (x) => (x == null ? "–" : xi.len ? String(Math.round(x * xi.len)) : (x * 100).toFixed(1));
+  const k = (v) => (v == null ? "–" : String(Math.round(v)));
+  const pair = (a, b) => `${a}<span class="sep">·</span>${b}`;
+  const ms = (v) => (v == null ? "–" : fmtDelta(v / 1000).replace(" s", ""));
+  const wash = (v) => (v == null || Math.abs(v) < 50 ? "" : v > 0 ? "slower" : "faster");
+
+  for (const s of corners) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    tr.title = `${s.name}：${xi.fmt(s.start)} – ${xi.fmt(s.end)}`;
+    tr.innerHTML = `
+      <td>${s.name}</td>
+      <td class="num">${p(s.apex)}</td>
+      <td class="num">${pair(k(s.ref.entry_kmh), k(s.cmp.entry_kmh))}</td>
+      <td class="num">${pair(k(s.ref.min_kmh), k(s.cmp.min_kmh))}</td>
+      <td class="num">${pair(k(s.ref.exit_kmh), k(s.cmp.exit_kmh))}</td>
+      <td class="num">${pair(p(s.ref.brake_pos), p(s.cmp.brake_pos))}</td>
+      <td class="num ${wash(s.delta_ms)}">${ms(s.delta_ms)}</td>`;
+    tr.onclick = () => zoomTo(s, tr);
+    tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); zoomTo(s, tr); } };
+    tbody.append(tr);
+  }
+  if (corners.length) {
+    const straights = segs.filter((s) => s.kind === "straight");
+    const sum = (arr) => arr.reduce((a, s) => a + (s.delta_ms || 0), 0);
+    foot.innerHTML = `
+      <tr><td colspan="6">弯道合计（${corners.length} 个）</td><td class="num">${ms(sum(corners))}</td></tr>
+      <tr><td colspan="6">直道合计（${straights.length} 段，弯与弯之间）</td><td class="num">${ms(sum(straights))}</td></tr>
+      <tr><td colspan="6">整圈</td><td class="num">${ms(ct.total_delta_ms)}</td></tr>`;
+  }
+}
+
+// 点弯道行：所有图放大到该弯（setScale 钩子会同步到其它图）；再点一次还原
+function zoomTo(seg, tr) {
+  const p = state.plots[0];
+  if (!p) return;
+  const again = state.corner?.seg === seg;
+  clearCornerSel();
+  if (again) {
+    p.setScale("x", { min: state.data.x[0], max: state.data.x[state.data.x.length - 1] });
+    return;
+  }
+  const pad = (seg.end - seg.start) * 0.15;
+  const zoom = [Math.max(0, seg.start - pad), Math.min(1, seg.end + pad)];
+  state.corner = { seg, zoom };
+  tr.classList.add("sel");
+  p.setScale("x", { min: zoom[0], max: zoom[1] });
+}
+function clearCornerSel() {
+  state.corner = null;
+  for (const r of $("corners").children) r.classList.remove("sel");
 }
 
 function updateReadout(idx) {

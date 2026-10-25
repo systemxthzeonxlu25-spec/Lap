@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
-python -m pytest -q                    # 76 个测试，全部通过（配置在 pyproject.toml）
+python -m pytest -q                    # 83 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -23,6 +23,7 @@ python -m pytest -q                    # 76 个测试，全部通过（配置在
 | `simtelemetry/recorder.py` | 切圈 + 打标记：已完成圈数 +1 = 跨圈；有效/出站/进站/完整性标记；等待游戏给出圈时（最多 3 s，否则用估算值）；起终点附近位置回绕处理；计时先于圈数归零时暂存几帧 |
 | `simtelemetry/storage.py` | SQLite（WAL）：`laps` 表（一圈一条）+ `samples` 表（采样点，删除圈时级联删除）；“干净圈” = 有效 ∧ 完整 ∧ 非出站 ∧ 非进站，只有干净圈参与最快圈 |
 | `simtelemetry/analysis.py` | 按赛道距离对齐：t(d) 插值、多通道重采样（挡位用阶梯取值）、delta 曲线（正 = 对比圈更慢）、`LiveReference`（实时 delta，O(log n) 查询） |
+| `simtelemetry/corners.py` | 分弯道（纯函数）：`detect_corners()` 在参考圈速度曲线上找弯（速度谷底，比弯前最高速低 ≥ 15 km/h 或 8%，带回差，60 m 内合并）；`build_segments()` 弯道段 + 直道段首尾相接覆盖整圈；`corner_table()` 逐弯入弯/最低/出弯速度、刹车点、段用时差（各段之和 = 终点 delta）；`theoretical_best()` 理论最快圈（分段取自最快圈，按各圈归一化位置对齐） |
 | `simtelemetry/collector.py` | 采集线程：约 50 Hz 循环，游戏没开时每 3 s 安静重试，数据停止更新时检查进程是否退出；单独的写库线程；新最快圈出现后自动更新实时参考圈 |
 | `simtelemetry/live.py` | `LiveHub`：采集线程 → WebSocket 的最新快照 |
 | `simtelemetry/server.py` | FastAPI：`/setups` 页、`/api/setups*`（列表、扫描、文件详情/备注标签、版本换算值、原始 JSON 下载、对比）、`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
@@ -53,6 +54,11 @@ python -m pytest -q                    # 76 个测试，全部通过（配置在
 - **阶段 2 后端**：圈列表、按距离对齐的对比接口（含 delta，终点 delta 正好等于圈时差）、默认参考圈 = 该赛道+车型的个人最快干净圈。
 - **阶段 3 后端**：WebSocket 推送实时快照（速度、挡位、转速、油门/刹车、本圈时间、实时 delta、预测圈时、最近保存的圈），无变化时每 2 s 发一次心跳。
 - ACC 结构体定义已写好（逐字段对照官方文档）。
+
+- **分弯道对比 + 理论最快圈**：`/api/compare` 多了 `corners`（逐段表，原有字段不变），新增 `GET /api/theoretical_best?game=&track=&car=`（少于 2 个干净圈时为 null）。
+  圈对比页图表下面加了“弯道”表（点一行放大到该弯，再点还原），delta 图上淡色标出弯道段和 T1..Tn，圈列表标题旁显示理论最快圈。
+  只看速度找弯：全油门通过的弯找不到（合成赛道 9 个弯里 0.36 那个就是，找到 8 个）；跨起终点线的弯会被切成两半。
+  理论最快圈每次请求都读该组合全部干净圈的采样点，圈很多时可能要加缓存。
 
 - **调教（ACC）第一步**：换算表 + 解析 + 对比 + 命令行。已用真实调教文件核对过 296 GT3 的换算。
 

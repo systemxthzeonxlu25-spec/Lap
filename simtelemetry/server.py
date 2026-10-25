@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .analysis import compare_laps
 from .collector import Collector
+from .corners import corner_table, theoretical_best
 from .live import LiveHub
 from .paths import RESOURCE_ROOT
 from .setups.library import SetupLibrary
@@ -116,8 +117,21 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
         ref_lap, cmp_lap = storage.get_lap(ref), storage.get_lap(cmp)
         if not ref_lap or not cmp_lap:
             raise HTTPException(404, "lap not found")
-        return compare_laps(ref_lap, storage.get_samples(ref), cmp_lap, storage.get_samples(cmp),
-                            points=points)
+        res = compare_laps(ref_lap, storage.get_samples(ref), cmp_lap, storage.get_samples(cmp),
+                           points=points)
+        res["corners"] = corner_table(res)
+        for side in ("ref", "cmp"):
+            res[side].pop("t", None)          # 只用来分段，不发给前端
+        return res
+
+    @app.get("/api/theoretical_best")
+    def api_theoretical_best(game: str, track: str, car: str):
+        """理论最快圈：每段取各干净圈里最快的一段。少于 2 个干净圈时 best/theoretical 为 null。"""
+        clean = [l for l in storage.list_laps(game, track, car) if l["is_clean"]]
+        res = theoretical_best([(l, storage.get_samples(l["id"])) for l in clean]) if len(clean) >= 2 else None
+        if not res:
+            return {"best_ms": None, "theoretical_ms": None, "gain_ms": None, "laps": len(clean), "segments": []}
+        return res
 
     # ----------------------------------------------------------------- setups
     def lib() -> SetupLibrary:
