@@ -46,6 +46,9 @@
     <div class="card-head">
       <h2>圈列表</h2>
       <span class="hint" id="laps-hint"></span>
+      <span style="flex:1"></span>
+      <button id="import-btn" title="导入别人导出的 .lap.gz，拿来当参考圈对比">导入圈</button>
+      <input type="file" id="import-file" accept=".gz" multiple hidden>
     </div>
     <div class="table-wrap">
       <table>
@@ -230,6 +233,7 @@ function renderLaps() {
     if (!lap.is_complete) flags.push(["不完整", true]);
     if (lap.time_source === "estimated") flags.push(["估算圈时", false]);
     if (lap.session_type === "motec") flags.push(["MoTeC 导入", false]);
+    if (lap.is_imported) flags.push(["导入", false]);
     tr.innerHTML = `
       <td class="pick"><input type="radio" name="ref" aria-label="设为参考圈" ${lap.id === state.ref ? "checked" : ""} ${lap.id === state.cmp ? "disabled" : ""}></td>
       <td class="pick"><input type="radio" name="cmp" aria-label="设为对比圈" ${lap.id === state.cmp ? "checked" : ""} ${lap.id === state.ref ? "disabled" : ""}></td>
@@ -238,11 +242,12 @@ function renderLaps() {
       <td class="num">${best && lap.is_clean ? fmtGap(lap.lap_time_ms - best.lap_time_ms) : ""}</td>
       <td>${flags.map(([t, bad]) => `<span class="chip${bad ? " bad" : ""}">${t}</span>`).join("")}</td>
       <td>${fmtDate(lap.recorded_at)}</td>
-      <td><button class="del" title="删除这一圈" aria-label="删除第 ${lap.lap_number} 圈">✕</button></td>`;
+      <td><button class="del exp" title="导出这一圈（.lap.gz，发给别人对比）" aria-label="导出第 ${lap.lap_number} 圈">⤓</button><button class="del" title="删除这一圈" aria-label="删除第 ${lap.lap_number} 圈">✕</button></td>`;
     const [refIn, cmpIn] = tr.querySelectorAll("input");
     refIn.onchange = () => { state.ref = lap.id; renderLaps(); loadCompare(); };
     cmpIn.onchange = () => { state.cmp = lap.id; renderLaps(); loadCompare(); };
-    tr.querySelector(".del").onclick = () => deleteLap(lap);
+    tr.querySelector(".del:not(.exp)").onclick = () => deleteLap(lap);
+    tr.querySelector(".exp").onclick = () => exportLap(lap);
     tbody.append(tr);
   }
 }
@@ -259,6 +264,42 @@ function renderLapsHint() {
     el.title = `把 ${t.laps} 个干净圈按弯道分成 ${t.segments.length} 段，每段取最快的那一圈再加起来（分段在最快圈上划分）`;
   }
 }
+
+// ------------------------------------------------------------------ 导出 / 导入单圈
+function exportLap(lap) {
+  const note = prompt("给这一圈附一句备注（可以留空），比如车手名、车队、用的调教：", "");
+  if (note === null) return;
+  location.href = `/api/laps/${lap.id}/export?note=${encodeURIComponent(note)}`;
+}
+
+$("import-btn").onclick = () => $("import-file").click();
+$("import-file").onchange = async (ev) => {
+  const files = [...ev.target.files];
+  ev.target.value = "";
+  let last = null;
+  const errors = [];
+  for (const f of files) {
+    try {
+      const r = await fetch("/api/laps/import", { method: "POST", body: f, headers: { "Content-Type": "application/gzip" } });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || r.status);
+      last = body;
+    } catch (e) { errors.push(`${f.name}：${e.message}`); }
+  }
+  if (errors.length) alert("有文件没能导入：\n" + errors.join("\n"));
+  if (!last) return;
+  // 切到导入的那一圈所在的赛道+车型，把它设成参考圈
+  const lap = last.lap;
+  history.replaceState(null, "", "?" + new URLSearchParams({ game: lap.game, track: lap.track, car: lap.car }));
+  await loadCombos();
+  if (state.laps.some((l) => l.id === last.id)) {
+    if (state.cmp === last.id) state.cmp = state.ref;
+    state.ref = last.id;
+    if (state.cmp === state.ref) state.cmp = state.laps.find((l) => l.id !== last.id)?.id ?? null;
+    renderLaps();
+    await loadCompare();
+  }
+};
 
 async function deleteLap(lap) {
   if (!confirm(`删除${lapLabel(lap)}？删除后不能恢复。`)) return;

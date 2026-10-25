@@ -19,6 +19,9 @@ SCHEMA_VERSION = 2          # 2：加了调教库（setup_files / setup_versions
 
 # “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
+# 别人导出、导入进来的圈（lapfile.py）：可以当参考圈对比，但不算“个人最快圈”
+IMPORT_PREFIX = "import-"
+OWN_SQL = f"session_uid NOT LIKE '{IMPORT_PREFIX}%'"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
@@ -95,6 +98,7 @@ def _lap_row_to_dict(row: sqlite3.Row) -> dict:
     for k in ("is_valid", "is_out_lap", "is_in_lap", "is_complete"):
         d[k] = bool(d[k])
     d["is_clean"] = is_clean_lap(d["is_valid"], d["is_complete"], d["is_out_lap"], d["is_in_lap"])
+    d["is_imported"] = d["session_uid"].startswith(IMPORT_PREFIX)
     return d
 
 
@@ -151,8 +155,13 @@ class Storage:
         return lap_id
 
     def has_session(self, session_uid: str) -> bool:
+        return self.find_session_lap(session_uid) is not None
+
+    def find_session_lap(self, session_uid: str) -> int | None:
+        """这个 session_uid 下任意一圈的 id（导入时用来去重）。"""
         with self.connection() as con:
-            return con.execute("SELECT 1 FROM laps WHERE session_uid = ? LIMIT 1", (session_uid,)).fetchone() is not None
+            row = con.execute("SELECT id FROM laps WHERE session_uid = ? LIMIT 1", (session_uid,)).fetchone()
+        return row["id"] if row else None
 
     def delete_lap(self, lap_id: int) -> bool:
         with self.connection() as con:
@@ -164,8 +173,8 @@ class Storage:
             rows = con.execute(
                 f"""SELECT game, track, car,
                           COUNT(*) AS laps,
-                          SUM(CASE WHEN {CLEAN_SQL} THEN 1 ELSE 0 END) AS clean_laps,
-                          MIN(CASE WHEN {CLEAN_SQL} THEN lap_time_ms END) AS best_ms,
+                          SUM(CASE WHEN {CLEAN_SQL} AND {OWN_SQL} THEN 1 ELSE 0 END) AS clean_laps,
+                          MIN(CASE WHEN {CLEAN_SQL} AND {OWN_SQL} THEN lap_time_ms END) AS best_ms,
                           MAX(recorded_at) AS last_at
                    FROM laps GROUP BY game, track, car ORDER BY last_at DESC"""
             ).fetchall()
@@ -198,7 +207,7 @@ class Storage:
         with self.connection() as con:
             row = con.execute(
                 f"SELECT {_LAP_COLUMNS} FROM laps WHERE game = ? AND track = ? AND car = ? "
-                f"AND {CLEAN_SQL} ORDER BY lap_time_ms, id LIMIT 1",
+                f"AND {CLEAN_SQL} AND {OWN_SQL} ORDER BY lap_time_ms, id LIMIT 1",
                 (game, track, car),
             ).fetchone()
         return _lap_row_to_dict(row) if row else None

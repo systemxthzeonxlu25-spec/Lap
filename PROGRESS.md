@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
-python -m pytest -q                    # 83 个测试，全部通过（配置在 pyproject.toml）
+python -m pytest -q                    # 93 个测试，全部通过（另有 4 个只在 Windows 上跑）（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -43,6 +43,9 @@ python -m pytest -q                    # 83 个测试，全部通过（配置在
 | `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
 | `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
 | `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
+| `simtelemetry/lapfile.py` | 单圈导出 / 导入（`.lap.gz` = gzip JSON，只含这一圈和一句可选备注）：`python -m simtelemetry.lapfile export ID / import 文件`，网页上每圈有 ⤓ 导出、圈列表有“导入圈”。导入的圈 `session_uid` 以 `import-` 开头，按内容去重，能当参考圈，但不算个人最快圈 / 理论最快圈 |
+| `simtelemetry/paths.py`、`packaging/lap_main.py` | 源码运行 / 打包成 exe 时资源（web/）和数据（data/）放哪；PyInstaller 入口 |
+| `.github/workflows/ci.yml` | CI：Ubuntu / Windows × Python 3.10 / 3.13 跑测试（Windows 上 `tests/test_windows_shm.py` 真的创建 ACC / LMU 共享内存走完整读取路径）；Windows 上打包 `Lap.exe`（含 uPlot，离线可用），启动冒烟测试后作为 artifact 上传 |
 | `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
 | `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
 | `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |

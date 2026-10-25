@@ -20,6 +20,15 @@ python -m simtelemetry.setups diff a.json b.json
 python -m simtelemetry.motec "文档/Assetto Corsa Competizione/MoTeC/xxx.ld"
 ```
 
+把一圈发给朋友对比（网页上每圈的 ⤓ 按钮也可以导出，圈列表“导入圈”导入）：
+
+```bash
+python -m simtelemetry.lapfile export 圈ID --note "车手名"
+python -m simtelemetry.lapfile import xxx.lap.gz
+```
+
+Windows 用户也可以直接下载 CI 打包的 `Lap.exe`（GitHub Actions → 最新一次 CI → Artifacts → Lap-windows），双击运行，数据存在 exe 旁边的 `data/`。
+
 打开 `http://127.0.0.1:8000/`（圈对比）或 `/live`（实时面板）。
 
 目前 `sim`、`acc`、`lmu` 能采集（ACC / LMU 还没在真游戏上验证；LMU 需要在游戏设置里打开 Enable Plugins），AC / iRacing 还在做。架构、进度和已知问题见 [PROGRESS.md](PROGRESS.md)。

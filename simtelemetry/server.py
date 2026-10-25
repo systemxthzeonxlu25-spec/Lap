@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
-from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from .analysis import compare_laps
 from .collector import Collector
 from .corners import corner_table, theoretical_best
+from .lapfile import export_filename, export_lap, import_lap
 from .live import LiveHub
 from .paths import RESOURCE_ROOT
 from .setups.library import SetupLibrary
@@ -124,10 +125,30 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
             res[side].pop("t", None)          # 只用来分段，不发给前端
         return res
 
+    @app.get("/api/laps/{lap_id}/export")
+    def api_export_lap(lap_id: int, note: str = ""):
+        lap = storage.get_lap(lap_id)
+        if not lap:
+            raise HTTPException(404, "lap not found")
+        return Response(export_lap(storage, lap_id, note), media_type="application/gzip", headers={
+            "Content-Disposition": f'attachment; filename="{quote(export_filename(lap))}"'})
+
+    @app.post("/api/laps/import")
+    async def api_import_lap(request: Request):
+        """请求体就是 .lap.gz 文件本身（不用 multipart，免得多一个依赖）。"""
+        size = int(request.headers.get("content-length") or 0)
+        if size > 30 * 1024 * 1024:
+            raise HTTPException(413, "文件太大")
+        data = await request.body()
+        try:
+            return await asyncio.to_thread(import_lap, storage, data)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
     @app.get("/api/theoretical_best")
     def api_theoretical_best(game: str, track: str, car: str):
         """理论最快圈：每段取各干净圈里最快的一段。少于 2 个干净圈时 best/theoretical 为 null。"""
-        clean = [l for l in storage.list_laps(game, track, car) if l["is_clean"]]
+        clean = [l for l in storage.list_laps(game, track, car) if l["is_clean"] and not l["is_imported"]]
         res = theoretical_best([(l, storage.get_samples(l["id"])) for l in clean]) if len(clean) >= 2 else None
         if not res:
             return {"best_ms": None, "theoretical_ms": None, "gain_ms": None, "laps": len(clean), "segments": []}
