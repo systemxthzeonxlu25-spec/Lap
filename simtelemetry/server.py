@@ -34,6 +34,7 @@ CDN = {
 }
 
 NO_CACHE = {"Cache-Control": "no-cache"}
+IMPORT_LIMIT = 30 * 1024 * 1024        # 导入单圈文件的请求体上限（一圈几百 KB，留足余量）
 
 
 def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = None,
@@ -137,10 +138,16 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
     @app.post("/api/laps/import")
     async def api_import_lap(request: Request):
         """请求体就是 .lap.gz 文件本身（不用 multipart，免得多一个依赖）。"""
-        size = int(request.headers.get("content-length") or 0)
-        if size > 30 * 1024 * 1024:
+        limit = IMPORT_LIMIT
+        if int(request.headers.get("content-length") or 0) > limit:
             raise HTTPException(413, "文件太大")
-        data = await request.body()
+        chunks, size = [], 0
+        async for chunk in request.stream():                   # 没有 Content-Length（分块上传）时也要限住
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, "文件太大")
+            chunks.append(chunk)
+        data = b"".join(chunks)
         try:
             return await asyncio.to_thread(import_lap, storage, data)
         except ValueError as e:
@@ -214,12 +221,17 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
 
     @app.get("/api/setups/versions/{version_id}/raw")
     def api_setup_version_raw(version_id: int):
-        """原始 JSON，用来自己备份 / 手动放回游戏目录。"""
+        """原始文件（ACC .json / LMU .svm），用来自己备份 / 手动放回游戏目录。"""
         v = lib().get_version(version_id)
         if not v:
             raise HTTPException(404, "version not found")
-        return Response(v["content"], media_type="application/json", headers={
-            "Content-Disposition": f'attachment; filename="{quote(v["name"])}.json"'})
+        if v["raw"] is not None:            # 原样返回游戏写的字节（LMU 不一定是 UTF-8，所以不标 text/*）
+            body, media = v["raw"], "application/octet-stream" if v["game"] == "lmu" else "application/json"
+        else:                               # v0.1.1 之前存的版本只有解码后的文本
+            body, media = v["content"], "text/plain; charset=utf-8" if v["game"] == "lmu" else "application/json"
+        ext = ".svm" if v["game"] == "lmu" else ".json"
+        return Response(body, media_type=media, headers={
+            "Content-Disposition": f'attachment; filename="{quote(v["name"])}{ext}"'})
 
     @app.get("/api/setups/diff")
     def api_setup_diff(a: int, b: int, derived: bool = False):

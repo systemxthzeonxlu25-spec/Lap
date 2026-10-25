@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
-python -m pytest -q                    # 123 个测试，全部通过（另有 4 个只在 Windows 上跑；配置在 pyproject.toml）
+python -m pytest -q                    # 147 个测试，全部通过（另有 4 个只在 Windows 上跑；配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。

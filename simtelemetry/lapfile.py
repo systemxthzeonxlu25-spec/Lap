@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,6 +54,18 @@ def export_filename(lap: dict) -> str:
     return f"{lap['game']}_{safe}_{t}.lap.gz"
 
 
+def _is_number(v) -> bool:
+    """JSON 里的有限数字（in_pit / valid 这类开关通道也可能是 true/false）。"""
+    if isinstance(v, bool):
+        return True
+    if not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:                     # 超出 float 范围的大整数
+        return False
+
+
 def parse_lap_file(data: bytes) -> tuple[LapRecord, str]:
     """→ (可以直接 save_lap 的 LapRecord, 备注)。格式不对时抛 ValueError。"""
     try:
@@ -71,25 +84,42 @@ def parse_lap_file(data: bytes) -> tuple[LapRecord, str]:
     if doc.get("version") != VERSION:
         raise ValueError(f"圈文件版本 {doc.get('version')} 不支持（本程序支持 {VERSION}），请升级程序")
     lap, samples = doc.get("lap") or {}, doc.get("samples") or {}
+    if not isinstance(lap, dict) or not isinstance(samples, dict):
+        raise ValueError("圈文件结构不对")
     missing = [k for k in _LAP_FIELDS if k not in lap] + [c for c in SAMPLE_CHANNELS if c not in samples]
     if missing:
         raise ValueError(f"圈文件缺少字段：{', '.join(missing)}")
+    if not all(isinstance(samples[c], list) for c in SAMPLE_CHANNELS):
+        raise ValueError("采样点数据不完整")
     n = len(samples["t_ms"])
     if n < 2 or any(len(samples[c]) != n for c in SAMPLE_CHANNELS):
         raise ValueError("采样点数据不完整")
+    for c in SAMPLE_CHANNELS:
+        if not all(_is_number(v) for v in samples[c]):
+            raise ValueError(f"采样点 {c} 里有不是数字的值")
+    length = lap["track_length_m"]
+    if length is not None:
+        if isinstance(length, bool):          # float(True) == 1.0，会被当成 1 米长的赛道
+            raise ValueError("圈文件里的赛道长度不是数字")
+        try:
+            length = float(length)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("圈文件里的赛道长度不是数字") from None
+        if not (math.isfinite(length) and length > 0):
+            raise ValueError("圈文件里的赛道长度不对")
     try:
         recorded = datetime.fromisoformat(lap["recorded_at"])
         session = SessionInfo(game=str(lap["game"]), track=str(lap["track"]), car=str(lap["car"]),
-                              track_length_m=lap["track_length_m"], session_type=str(lap["session_type"]))
+                              track_length_m=length, session_type=str(lap["session_type"]))
         rec = LapRecord(
             session=session, session_uid=IMPORT_PREFIX + hashlib.sha256(raw).hexdigest()[:12],
             lap_number=int(lap["lap_number"]), lap_time_ms=int(lap["lap_time_ms"]), time_source=str(lap["time_source"]),
             is_valid=bool(lap["is_valid"]), is_out_lap=bool(lap["is_out_lap"]), is_in_lap=bool(lap["is_in_lap"]),
             is_complete=bool(lap["is_complete"]), recorded_at=recorded,
             samples={c: list(samples[c]) for c in SAMPLE_CHANNELS},
-            track_length_m=lap["track_length_m"],
+            track_length_m=length,
         )
-    except (TypeError, ValueError, KeyError) as e:
+    except (TypeError, ValueError, KeyError, OverflowError) as e:
         raise ValueError(f"圈文件内容有误：{e}") from e
     if rec.lap_time_ms <= 0:
         raise ValueError("圈时不对")

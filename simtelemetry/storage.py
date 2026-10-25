@@ -15,7 +15,7 @@ from .paths import DATA_ROOT
 
 DEFAULT_DB = DATA_ROOT / "data" / "telemetry.db"
 
-SCHEMA_VERSION = 3          # 2：调教库（setup_files / setup_versions）；3：session_setups。都只新增表，旧库打开时自动补上
+SCHEMA_VERSION = 4          # 2：调教库（setup_files / setup_versions）；3：session_setups；4：setup_versions.raw。旧库打开时自动补上
 
 # “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS setup_versions (
     file_id     INTEGER NOT NULL REFERENCES setup_files (id) ON DELETE CASCADE,
     sha256      TEXT    NOT NULL,
     content     TEXT    NOT NULL,
+    raw         BLOB,                     -- 原始文件字节（下载时原样返回；v4 之前的版本没有，为 NULL）
     file_mtime  TEXT    NOT NULL,         -- 文件修改时间（ISO-8601 UTC）
     captured_at TEXT    NOT NULL
 );
@@ -123,6 +124,9 @@ class Storage:
                                    f"{SCHEMA_VERSION} 新，请升级程序")
             con.execute("PRAGMA journal_mode = WAL")
             con.executescript(_SCHEMA)
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(setup_versions)")}
+            if "raw" not in cols:
+                con.execute("ALTER TABLE setup_versions ADD COLUMN raw BLOB")
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager

@@ -145,7 +145,7 @@ td.group { font-weight: 600; color: var(--text-2); font-size: 12px; padding-top:
 
 const GAME_NAMES = { sim: "模拟数据", acc: "ACC", ac: "AC", iracing: "iRacing", lmu: "LMU" };
 const $ = (id) => document.getElementById(id);
-const state = { combo: null, laps: [], bestId: null, ref: null, cmp: null, data: null, plots: [], theo: null, corner: null };
+const state = { combo: null, comboReq: 0, laps: [], bestId: null, ref: null, cmp: null, data: null, plots: [], theo: null, corner: null };
 
 // ------------------------------------------------------------------ helpers
 function fmtLap(ms) {
@@ -223,10 +223,12 @@ function showLapsEmpty(text) {
 }
 
 async function selectCombo(combo, fromUrl) {
+  const req = ++state.comboReq;                            // 只认最后一次调用的结果（A → B → A 时第一个 A 的回应也作废）
   state.combo = combo;
   state.theo = null;
   const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
   const r = await getJSON("/api/laps?" + q);
+  if (req !== state.comboReq) return;                      // 加载期间又换了赛道+车型 / 刷新过
   state.laps = r.laps;
   state.bestId = r.best_lap_id;
   const url = new URLSearchParams(location.search);
@@ -240,16 +242,16 @@ async function selectCombo(combo, fromUrl) {
     state.cmp = state.laps.find((l) => l.id !== state.ref)?.id ?? null;
   }
   renderLaps();
-  loadTheo(combo);
+  loadTheo(combo, req);
   await loadCompare();
 }
 
 // 理论最快圈：每段取各干净圈里最快的一段（后端在最快圈上按弯道分段）
-async function loadTheo(combo) {
+async function loadTheo(combo, req) {
   const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
   let theo = null;
   try { theo = await getJSON("/api/theoretical_best?" + q); } catch (e) { /* 只是提示，失败就不显示 */ }
-  if (state.combo !== combo) return;
+  if (req !== state.comboReq) return;
   state.theo = theo;
   renderLapsHint();
 }
@@ -288,7 +290,8 @@ function renderLaps() {
     cmpIn.onchange = () => { state.cmp = lap.id; renderLaps(); loadCompare(); };
     tr.querySelector(".del:not(.exp)").onclick = () => deleteLap(lap);
     tr.querySelector(".exp").onclick = () => exportLap(lap);
-    tr.querySelector(".setup-btn").onclick = () => chooseSetup(lap);
+    const setupBtn = tr.querySelector(".setup-btn");      // 导入的圈没有调教按钮
+    if (setupBtn) setupBtn.onclick = () => chooseSetup(lap);
     tbody.append(tr);
   }
 }
