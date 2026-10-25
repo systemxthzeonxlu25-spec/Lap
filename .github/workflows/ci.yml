@@ -52,27 +52,32 @@ jobs:
           rm -rf package uplot-1.6.32.tgz
       - name: PyInstaller
         run: >-
-          pyinstaller --noconfirm --onefile --name Lap
+          pyinstaller --noconfirm --onefile --name Lap --paths .
           --add-data "web;web" --add-data "LICENSE;."
-          --collect-submodules simtelemetry --collect-submodules uvicorn
+          --collect-submodules uvicorn
           packaging/lap_main.py
       - name: 冒烟测试：exe 能启动、网页和接口能访问
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\Lap.exe -ArgumentList "--game","sim","--port","8765","--db","$env:RUNNER_TEMP\smoke.db","--no-setups" -PassThru -RedirectStandardError "$env:RUNNER_TEMP\err.log"
-          $ok = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-            try { $r = Invoke-RestMethod http://127.0.0.1:8765/api/status; if ($r.collector.connected) { $ok = $true; break } } catch {}
+          $p = Start-Process -FilePath dist\Lap.exe -ArgumentList "--game","sim","--port","8765","--db","$env:RUNNER_TEMP\smoke.db","--no-setups" -PassThru -RedirectStandardError "$env:RUNNER_TEMP\err.log" -RedirectStandardOutput "$env:RUNNER_TEMP\out.log"
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              if ($p.HasExited) { break }
+              try { $r = Invoke-RestMethod http://127.0.0.1:8765/api/status; if ($r.collector.connected) { $ok = $true; break } } catch {}
+            }
+            if (-not $ok) { throw "exe 没有正常启动采集" }
+            $pages = @("/", "/live", "/setups", "/static/app.css", "/vendor/uPlot.iife.min.js") | ForEach-Object {
+              (Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 "http://127.0.0.1:8765$_").StatusCode
+            }
+            if ($pages | Where-Object { $_ -ne 200 }) { throw "页面状态码：$pages" }
+            "页面状态码：$pages"
+          } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+            "---- exe 输出 ----"
+            Get-Content "$env:RUNNER_TEMP\out.log", "$env:RUNNER_TEMP\err.log" -Tail 30 -ErrorAction SilentlyContinue
           }
-          $pages = @("/", "/live", "/setups", "/static/app.css", "/vendor/uPlot.iife.min.js") | ForEach-Object {
-            (Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 "http://127.0.0.1:8765$_").StatusCode
-          }
-          Stop-Process -Id $p.Id -Force
-          Get-Content "$env:RUNNER_TEMP\err.log" -Tail 20
-          if (-not $ok) { throw "exe 没有正常启动采集" }
-          if ($pages | Where-Object { $_ -ne 200 }) { throw "页面状态码：$pages" }
-          "页面状态码：$pages"
       - uses: actions/upload-artifact@v4
         with:
           name: Lap-windows

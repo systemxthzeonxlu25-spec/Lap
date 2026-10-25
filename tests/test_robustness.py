@@ -60,3 +60,16 @@ def test_cli_rejects_bad_args(argv, tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         cli.main([*argv, "--db", str(tmp_path / "x.db")])
     assert e.value.code == 2
+
+
+def test_dynamic_adapters_are_visible_to_pyinstaller():
+    # 适配器是按名字动态导入的；打包成 exe 时只认 adapters/__init__.py 里 TYPE_CHECKING 那行 import，漏了 exe 里就没有这个游戏
+    import re
+    from pathlib import Path
+
+    from simtelemetry.adapters import _REGISTRY
+
+    src = (Path(__file__).resolve().parent.parent / "simtelemetry" / "adapters" / "__init__.py").read_text("utf-8")
+    listed = set(re.search(r"if TYPE_CHECKING:.*?from \. import ([\w, ]+)", src, re.S).group(1).replace(" ", "").split(","))
+    implemented = {mod.lstrip(".") for game, (mod, _) in _REGISTRY.items() if is_implemented(game)}
+    assert implemented == listed
