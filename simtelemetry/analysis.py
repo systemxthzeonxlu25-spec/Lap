@@ -125,8 +125,8 @@ def compare_laps(ref: dict, ref_samples: dict, cmp: dict, cmp_samples: dict, poi
     return {
         "x": grid,
         "track_length_m": length,
-        "ref": {"lap": ref, **{k: v for k, v in r.items() if k != "t"}},
-        "cmp": {"lap": cmp, **{k: v for k, v in c.items() if k != "t"}},
+        "ref": {"lap": ref, **r},          # "t" = 到达该位置时的本圈用时（ms），分弯道用
+        "cmp": {"lap": cmp, **c},
         "delta": delta,
     }
 
