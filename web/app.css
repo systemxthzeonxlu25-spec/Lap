@@ -1,0 +1,117 @@
+/* 圈对比页、调教页共用的颜色和基础样式（实时面板始终深色，单独写） */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --hover: rgba(11, 11, 11, 0.04);
+  --ref: #2a78d6;
+  --cmp: #eb6834;
+  --slower: #d03b3b;
+  --faster: #0ca30c;
+  --slower-wash: rgba(208, 59, 59, 0.12);
+  --faster-wash: rgba(12, 163, 12, 0.12);
+  --danger-text: #b42f2f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --hover: rgba(255, 255, 255, 0.05);
+    --ref: #3987e5;
+    --cmp: #d95926;
+    --slower-wash: rgba(208, 59, 59, 0.20);
+    --faster-wash: rgba(12, 163, 12, 0.20);
+    --danger-text: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --hover: rgba(255, 255, 255, 0.05);
+  --ref: #3987e5;
+  --cmp: #d95926;
+  --slower-wash: rgba(208, 59, 59, 0.20);
+  --faster-wash: rgba(12, 163, 12, 0.20);
+  --danger-text: #e66767;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+header .spacer { flex: 1; }
+nav { display: flex; gap: 4px; }
+nav a { text-decoration: none; color: var(--text-2); padding: 4px 10px; border-radius: 6px; }
+nav a:hover { background: var(--hover); color: var(--text); }
+nav a[aria-current="page"] { color: var(--text); background: var(--hover); font-weight: 600; }
+a { color: inherit; }
+select, button {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; min-height: 32px;
+}
+button { cursor: pointer; }
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; }
+select { max-width: 100%; }
+
+main { padding: 16px; max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+main > * { min-width: 0; }     /* 表格太宽时在卡片内部滚动，不把整页撑宽 */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.card-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.card-head h2 { font-size: 14px; margin: 0; font-weight: 600; }
+.hint { color: var(--muted); font-size: 12px; }
+.empty { padding: 32px 16px; text-align: center; color: var(--text-2); }
+
+/* ---- tables */
+.table-wrap { overflow: auto; max-height: 340px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 12px; text-align: left; white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface); color: var(--text-2); font-weight: 500;
+     font-size: 12px; border-bottom: 1px solid var(--border); z-index: 1; }
+td { border-bottom: 1px solid var(--grid); }
+tbody tr:hover { background: var(--hover); }
+td.num, th.num { text-align: right; }
+td.pick { text-align: center; width: 1%; }
+td.pick input { width: 16px; height: 16px; cursor: pointer; }
+td.pick input:disabled { cursor: default; }
+.ref-key, .cmp-key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.ref-key { background: var(--ref); }
+.cmp-key { background: var(--cmp); }
+.chip { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border);
+        color: var(--text-2); margin-right: 4px; }
+.chip.bad { color: var(--danger-text); }
+.best { font-weight: 600; }
+.del { border: none; background: none; color: var(--muted); padding: 2px 6px; min-height: 0; }
+.del:hover { color: var(--danger-text); background: none; }
+

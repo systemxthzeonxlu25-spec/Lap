@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>调教</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+.layout { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.layout > * { min-width: 0; }
+.stack { display: grid; gap: 16px; min-width: 0; }
+.stack > * { min-width: 0; }
+
+input[type="search"], input[type="text"], textarea {
+  font: inherit; color: var(--text); background: var(--page); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; width: 100%;
+}
+textarea { min-height: 60px; resize: vertical; }
+
+/* 文件列表 */
+.files { max-height: calc(100vh - 190px); overflow: auto; }
+.group-car { padding: 10px 16px 2px; font-weight: 600; font-size: 13px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.group-track { padding: 6px 16px 2px; font-size: 12px; color: var(--muted); }
+.file { display: block; width: 100%; text-align: left; border: none; border-radius: 0; background: none; padding: 7px 16px 7px 24px; }
+.file:hover { background: var(--hover); }
+.file[aria-current="true"] { background: var(--hover); box-shadow: inset 3px 0 0 var(--ref); }
+.file .name { font-weight: 500; overflow-wrap: anywhere; }
+.file .meta { font-size: 12px; color: var(--muted); }
+.file .note { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 详情 */
+.detail-body { padding: 12px 16px; display: grid; gap: 10px; }
+.path { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row > label { color: var(--text-2); font-size: 12px; min-width: 32px; }
+.row > input, .row > textarea { flex: 1; min-width: 0; }
+.saved { color: var(--muted); font-size: 12px; }
+.slot { font-size: 12px; font-weight: 600; color: var(--text-2); }
+
+/* 对比 */
+.compare-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; font-size: 13px; }
+.compare-head b { color: var(--text-2); font-weight: 600; }
+.compare-head span { overflow-wrap: anywhere; }
+td.group { font-weight: 600; color: var(--text-2); font-size: 12px; padding-top: 12px; background: var(--surface); }
+td.val { text-align: right; }
+td.arrow { color: var(--muted); text-align: center; width: 1%; }
+td.clicks { color: var(--text-2); text-align: right; }
+td.derived { color: var(--muted); }
+#diff-table td:first-child { white-space: normal; }
+.toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.warn { color: var(--danger-text); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>调教</h1>
+  <nav><a href="/">圈对比</a><a href="/setups" aria-current="page">调教</a><a href="/live">实时面板</a></nav>
+  <span class="spacer"></span>
+  <span class="hint" id="root"></span>
+  <button id="rescan">重新扫描</button>
+</header>
+
+<main>
+  <div class="empty card" id="disabled" hidden>
+    没有找到调教目录。启动时用 <code>--acc-setups "目录"</code> / <code>--lmu-setups "目录"</code> 指定，例如
+    <code>C:\Users\你\Documents\Assetto Corsa Competizione\Setups</code>、
+    <code>…\steamapps\common\Le Mans Ultimate\UserData\player\Settings</code>。
+  </div>
+
+  <div class="layout" id="layout" hidden>
+    <section class="card">
+      <div class="card-head"><h2>调教文件</h2><span class="hint" id="count"></span></div>
+      <div style="padding: 10px 16px; border-bottom: 1px solid var(--border)">
+        <input type="search" id="filter" placeholder="搜索车型、赛道、名字、标签、备注" aria-label="搜索调教">
+      </div>
+      <div class="files" id="files"></div>
+    </section>
+
+    <div class="stack">
+      <section class="card" id="detail" hidden>
+        <div class="card-head">
+          <h2 id="d-name"></h2>
+          <span class="hint" id="d-sub"></span>
+        </div>
+        <div class="detail-body">
+          <div class="path" id="d-path"></div>
+          <div class="row"><label for="d-tags">标签</label><input type="text" id="d-tags" placeholder="用逗号分隔，如：干地, 排位"></div>
+          <div class="row"><label for="d-note">备注</label><textarea id="d-note" placeholder="这套调教的思路、适用条件…"></textarea></div>
+          <div class="row"><button id="d-save">保存备注和标签</button><span class="saved" id="d-saved"></span></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>A</th><th>B</th><th>记录时间</th><th>文件修改时间</th><th></th></tr></thead>
+            <tbody id="versions"></tbody>
+          </table>
+        </div>
+        <div class="hint" style="padding: 8px 16px 12px">
+          手动选过 A 之后 A 会固定：再点别的调教文件，就是“固定的 A ↔ 那个文件的最新版本”。版本是只读快照，游戏目录里的文件从不被改动。
+        </div>
+      </section>
+
+      <section class="card" id="compare" hidden>
+        <div class="card-head">
+          <div class="compare-head" id="c-head"></div>
+          <span class="spacer" style="flex:1"></span>
+          <label class="toggle"><input type="checkbox" id="c-derived">显示派生值 / 不可调项</label>
+        </div>
+        <div class="warn" id="c-warn" style="padding: 0 16px"></div>
+        <div class="table-wrap" style="max-height: none">
+          <table id="diff-table"><tbody id="c-body"></tbody></table>
+        </div>
+        <div class="empty" id="c-empty" hidden></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+// a / b：{ id, label }；pinnedA = 用户手动选过 A，换文件时保留它，用来跨文件对比
+const state = { files: [], file: null, a: null, b: null, pinnedA: false };
+const GAME_NAMES = { acc: "ACC", lmu: "LMU" };
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.json();
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ------------------------------------------------------------------ 文件列表
+async function loadFiles() {
+  const r = await getJSON("/api/setups");
+  if (!r.enabled) { $("disabled").hidden = false; $("rescan").hidden = true; return; }
+  $("layout").hidden = false;
+  $("root").textContent = Object.values(r.roots).join("  ");
+  state.files = r.files;
+  renderFiles();
+  const want = Number(new URLSearchParams(location.search).get("file"));
+  if (!state.file && state.files.length) await selectFile(state.files.find((f) => f.id === want)?.id ?? state.files[0].id);
+}
+
+function renderFiles() {
+  const q = $("filter").value.trim().toLowerCase();
+  const match = (f) => !q || [f.game, f.car, f.car_name, f.track, f.name, f.note, ...f.tags].join(" ").toLowerCase().includes(q);
+  const list = state.files.filter(match);
+  $("count").textContent = `${list.length} / ${state.files.length}`;
+  const box = $("files");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">${state.files.length ? "没有匹配的调教" : "调教目录里还没有文件"}</div>`;
+    return;
+  }
+  let car = null, track = null;
+  for (const f of list) {
+    const carKey = f.game + "/" + f.car;
+    if (carKey !== car) {
+      car = carKey; track = null;
+      box.insertAdjacentHTML("beforeend", `<div class="group-car">${esc(f.car_name)} <span class="chip">${GAME_NAMES[f.game] || esc(f.game)}</span></div>`);
+    }
+    if (f.track !== track) { track = f.track; box.insertAdjacentHTML("beforeend", `<div class="group-track">${esc(f.track)}</div>`); }
+    const btn = document.createElement("button");
+    btn.className = "file";
+    btn.setAttribute("aria-current", String(state.file?.id === f.id));
+    btn.innerHTML = `
+      <div class="name">${esc(f.name)} ${f.missing ? '<span class="chip bad">已不在游戏目录</span>' : ""}</div>
+      <div class="meta">${f.versions} 个版本 · ${fmtTime(f.last_changed)} ${f.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}</div>
+      ${f.note ? `<div class="note">${esc(f.note)}</div>` : ""}`;
+    btn.onclick = () => selectFile(f.id);
+    box.append(btn);
+  }
+}
+$("filter").oninput = renderFiles;
+
+// ------------------------------------------------------------------ 详情 + 版本
+async function selectFile(id) {
+  const f = await getJSON(`/api/setups/files/${id}`);
+  state.file = f;
+  history.replaceState(null, "", `?file=${id}`);
+  renderFiles();
+  $("detail").hidden = false;
+  $("d-name").textContent = f.name;
+  $("d-sub").textContent = `${f.car_name} · ${f.track}`;
+  $("d-path").textContent = f.rel_path + (f.missing ? "（游戏目录里已经没有这个文件，下面是保存的历史版本）" : "");
+  $("d-tags").value = f.tags.join(", ");
+  $("d-note").value = f.note;
+  $("d-saved").textContent = "";
+  // 默认：上一个版本 → 最新版本，看最近改了什么；只有一个版本时就只看它
+  const [latest, prev] = f.versions;
+  const label = (v) => `${f.name}（${fmtTime(v.captured_at)}）`;
+  if (state.pinnedA && state.a) {
+    state.b = { id: latest.id, label: label(latest) };          // 跨文件对比：固定的 A ↔ 这个文件的最新版本
+  } else {
+    state.a = prev ? { id: prev.id, label: label(prev) } : { id: latest.id, label: label(latest) };
+    state.b = prev ? { id: latest.id, label: label(latest) } : null;
+  }
+  renderVersions();
+  await renderCompare();
+}
+
+function renderVersions() {
+  const f = state.file, tbody = $("versions");
+  tbody.innerHTML = "";
+  f.versions.forEach((v, i) => {
+    const tr = document.createElement("tr");
+    const label = `${f.name}（${fmtTime(v.captured_at)}）`;
+    tr.innerHTML = `
+      <td class="pick"><input type="radio" name="slot-a" aria-label="设为 A" ${state.a?.id === v.id ? "checked" : ""}></td>
+      <td class="pick"><input type="radio" name="slot-b" aria-label="设为 B" ${state.b?.id === v.id ? "checked" : ""}></td>
+      <td>${fmtTime(v.captured_at)}${i === 0 ? ' <span class="chip">最新</span>' : ""}</td>
+      <td>${fmtTime(v.file_mtime)}</td>
+      <td><a href="/api/setups/versions/${v.id}/raw" download>下载</a></td>`;
+    const [ra, rb] = tr.querySelectorAll("input");
+    ra.onclick = () => { state.a = { id: v.id, label }; state.pinnedA = true; renderCompare(); };   // click：已选中的也能点来固定
+    rb.onchange = () => { state.b = { id: v.id, label }; renderCompare(); };
+    tbody.append(tr);
+  });
+}
+
+$("d-save").onclick = async () => {
+  const tags = $("d-tags").value.split(/[,，]/);
+  const f = await getJSON(`/api/setups/files/${state.file.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: $("d-note").value, tags }),
+  });
+  state.file = { ...state.file, note: f.note, tags: f.tags };
+  $("d-tags").value = f.tags.join(", ");
+  $("d-saved").textContent = "已保存";
+  const i = state.files.findIndex((x) => x.id === f.id);
+  if (i >= 0) state.files[i] = { ...state.files[i], note: f.note, tags: f.tags };
+  renderFiles();
+};
+
+// ------------------------------------------------------------------ 对比 / 单个版本
+async function renderCompare() {
+  $("compare").hidden = false;
+  const body = $("c-body"), derived = $("c-derived").checked;
+  body.innerHTML = "";
+  $("c-warn").textContent = "";
+  $("c-empty").hidden = true;
+
+  if (!state.b || state.b.id === state.a.id) {
+    $("c-head").innerHTML = `<b>查看</b><span>${esc(state.a.label)}</span>`;
+    const v = await getJSON(`/api/setups/versions/${state.a.id}`);
+    if (!v.has_conversion) $("c-warn").textContent = "没有这辆车的换算表，只显示原始格数";
+    // 四个车轮的同一项合成一行：项目 | 左前 | 右前 | 左后 | 右后
+    const rows = [];
+    for (const it of v.items) {
+      if (it.derived && !derived) continue;
+      const m = / (左前|右前|左后|右后)$/.test(it.label) ? /^(.+)\.([0-3])$/.exec(it.key) : null;
+      const last = rows[rows.length - 1];
+      if (m && last && last.base === m[1]) { last.cells[+m[2]] = it; continue; }
+      rows.push(m ? { base: m[1], group: it.group, label: it.label.replace(/ (左前|前)$/, ""), derived: it.derived,
+                      cells: Object.assign([null, null, null, null], { [+m[2]]: it }) }
+                  : { base: it.key, group: it.group, label: it.label, derived: it.derived, cells: [it] });
+    }
+    const cell = (it) => {
+      if (!it) return "";
+      const raw = it.value != null && typeof it.raw === "number" ? `<div class="hint">第 ${it.raw} 格</div>` : "";
+      return `${esc(it.display)}${raw}`;
+    };
+    let group = null;
+    for (const r of rows) {
+      if (r.group !== group) {
+        group = r.group;
+        body.insertAdjacentHTML("beforeend", `<tr><td class="group" colspan="5">${esc(group)}</td></tr>`);
+      }
+      const cols = r.cells.length === 4
+        ? r.cells.map((it, i) => `<td class="val" title="${["左前", "右前", "左后", "右后"][i]}">${cell(it)}</td>`).join("")
+        : `<td class="val" colspan="4">${cell(r.cells[0])}</td>`;
+      body.insertAdjacentHTML("beforeend", `<tr><td class="${r.derived ? "derived" : ""}">${esc(r.label)}</td>${cols}</tr>`);
+    }
+    body.insertAdjacentHTML("afterbegin", `<tr><th>项目</th><th class="num">左前</th><th class="num">右前</th><th class="num">左后</th><th class="num">右后</th></tr>`);
+    return;
+  }
+
+  $("c-head").innerHTML = `<b>A</b><span>${esc(state.a.label)}${state.pinnedA
+    ? ' <button class="del" id="unpin" title="取消固定：换文件时 A 跟着换">已固定 ✕</button>' : ""}</span>
+    <b>B</b><span>${esc(state.b.label)}</span>`;
+  if (state.pinnedA) $("unpin").onclick = () => { state.pinnedA = false; selectFile(state.file.id); };
+  const d = await getJSON(`/api/setups/diff?a=${state.a.id}&b=${state.b.id}&derived=${derived}`);
+  if (!d.same_car) $("c-warn").textContent = `两套调教不是同一辆车（${d.a.car} / ${d.b.car}），格数含义可能不同`;
+  if (!d.changes.length) {
+    $("c-empty").hidden = false;
+    $("c-empty").textContent = "两个版本没有差异";
+    return;
+  }
+  body.insertAdjacentHTML("beforeend", `<tr><th>项目</th><th class="num">A</th><th></th><th>B</th><th class="num">变化</th></tr>`);
+  let group = null;
+  for (const c of d.changes) {
+    if (c.group !== group) { group = c.group; body.insertAdjacentHTML("beforeend", `<tr><td class="group" colspan="5">${esc(group)}</td></tr>`); }
+    const clicks = c.clicks && !["策略", "其他"].includes(c.group) ? `${c.clicks > 0 ? "+" : "−"}${Math.abs(c.clicks)} 格` : "";
+    body.insertAdjacentHTML("beforeend", `<tr>
+      <td class="${c.derived ? "derived" : ""}">${esc(c.label)}</td>
+      <td class="val">${esc(c.a ? c.a.display : "（无）")}</td><td class="arrow">→</td>
+      <td>${esc(c.b ? c.b.display : "（无）")}</td><td class="clicks">${clicks}</td></tr>`);
+  }
+}
+$("c-derived").onchange = renderCompare;
+
+$("rescan").onclick = async () => {
+  $("rescan").disabled = true;
+  try {
+    const r = await getJSON("/api/setups/scan", { method: "POST" });
+    $("root").textContent = `新文件 ${r.new_files}，新版本 ${r.new_versions}`;
+    const keep = state.file?.id;
+    await loadFiles();
+    if (keep) await selectFile(keep);
+  } finally { $("rescan").disabled = false; }
+};
+
+loadFiles().catch((e) => { $("disabled").hidden = false; $("disabled").textContent = "加载失败：" + e.message; });
+</script>
+</body>
+</html>

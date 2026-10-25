@@ -10,12 +10,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from .models import SAMPLE_CHANNELS, LapRecord
+from .models import SAMPLE_CHANNELS, LapRecord, is_clean_lap
+from .paths import DATA_ROOT
 
-SCHEMA_VERSION = 1
+DEFAULT_DB = DATA_ROOT / "data" / "telemetry.db"
 
-# “干净圈”：参与最快圈比较
+SCHEMA_VERSION = 3          # 2：调教库（setup_files / setup_versions）；3：session_setups。都只新增表，旧库打开时自动补上
+
+# “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
+# 别人导出、导入进来的圈（lapfile.py）：可以当参考圈对比，但不算“个人最快圈”
+IMPORT_PREFIX = "import-"
+OWN_SQL = f"session_uid NOT LIKE '{IMPORT_PREFIX}%'"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS laps (
@@ -53,6 +59,39 @@ CREATE TABLE IF NOT EXISTS samples (
     valid     INTEGER NOT NULL,
     PRIMARY KEY (lap_id, idx)
 ) WITHOUT ROWID;
+
+-- 调教库：游戏目录里的每个调教文件一行；内容每变一次存一个版本（只读游戏目录，从不写回）
+CREATE TABLE IF NOT EXISTS setup_files (
+    id          INTEGER PRIMARY KEY,
+    game        TEXT    NOT NULL,
+    rel_path    TEXT    NOT NULL,         -- 相对调教根目录，如 ferrari_296_gt3/monza/q1.json
+    car         TEXT    NOT NULL,
+    track       TEXT    NOT NULL,
+    name        TEXT    NOT NULL,         -- 文件名（不含扩展名）
+    note        TEXT    NOT NULL DEFAULT '',
+    tags        TEXT    NOT NULL DEFAULT '[]',   -- JSON 数组
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    missing     INTEGER NOT NULL DEFAULT 0,      -- 游戏目录里已经没有这个文件了（历史版本仍保留）
+    UNIQUE (game, rel_path)
+);
+
+CREATE TABLE IF NOT EXISTS setup_versions (
+    id          INTEGER PRIMARY KEY,
+    file_id     INTEGER NOT NULL REFERENCES setup_files (id) ON DELETE CASCADE,
+    sha256      TEXT    NOT NULL,
+    content     TEXT    NOT NULL,
+    file_mtime  TEXT    NOT NULL,         -- 文件修改时间（ISO-8601 UTC）
+    captured_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_setup_versions_file ON setup_versions (file_id, id);
+
+-- 用户手动指定的“这个会话用的是哪套调教”（没有记录的会话按时间自动猜，见 setups/linking.py）
+CREATE TABLE IF NOT EXISTS session_setups (
+    session_uid        TEXT PRIMARY KEY,
+    setup_version_id   INTEGER REFERENCES setup_versions (id) ON DELETE SET NULL,   -- NULL = 用户选了“不记得 / 没有”
+    set_at             TEXT NOT NULL
+);
 """
 
 _LAP_COLUMNS = (
@@ -65,22 +104,29 @@ def _lap_row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     for k in ("is_valid", "is_out_lap", "is_in_lap", "is_complete"):
         d[k] = bool(d[k])
-    d["is_clean"] = d["is_valid"] and d["is_complete"] and not d["is_out_lap"] and not d["is_in_lap"]
+    d["is_clean"] = is_clean_lap(d["is_valid"], d["is_complete"], d["is_out_lap"], d["is_in_lap"])
+    d["is_imported"] = d["session_uid"].startswith(IMPORT_PREFIX)
     return d
 
 
 class Storage:
     def __init__(self, path: str | Path):
         self.path = str(path)
-        if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        with self._conn() as con:
+        if self.path == ":memory:" or self.path.startswith("file:"):
+            # 每次操作都新开连接，内存库每次都是空的，表建完就没了
+            raise ValueError("Storage 需要一个文件路径（测试请用临时目录下的文件）")
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        with self.connection() as con:
+            version = con.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError(f"数据库 {self.path} 的结构版本是 {version}，比本程序支持的 "
+                                   f"{SCHEMA_VERSION} 新，请升级程序")
             con.execute("PRAGMA journal_mode = WAL")
             con.executescript(_SCHEMA)
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
-    def _conn(self) -> Iterator[sqlite3.Connection]:
+    def connection(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path, timeout=10)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA foreign_keys = ON")
@@ -95,7 +141,7 @@ class Storage:
     def save_lap(self, rec: LapRecord) -> int:
         s = rec.session
         n = rec.sample_count
-        with self._conn() as con:
+        with self.connection() as con:
             cur = con.execute(
                 "INSERT INTO laps (game, track, car, session_type, session_uid, lap_number, "
                 "lap_time_ms, time_source, is_valid, is_out_lap, is_in_lap, is_complete, "
@@ -103,7 +149,7 @@ class Storage:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (s.game, s.track, s.car, s.session_type, rec.session_uid, rec.lap_number,
                  rec.lap_time_ms, rec.time_source, int(rec.is_valid), int(rec.is_out_lap),
-                 int(rec.is_in_lap), int(rec.is_complete), s.track_length_m, n,
+                 int(rec.is_in_lap), int(rec.is_complete), rec.track_length_m, n,
                  rec.recorded_at.isoformat(timespec="seconds")),
             )
             lap_id = int(cur.lastrowid)
@@ -115,25 +161,34 @@ class Storage:
             )
         return lap_id
 
+    def has_session(self, session_uid: str) -> bool:
+        return self.find_session_lap(session_uid) is not None
+
+    def find_session_lap(self, session_uid: str) -> int | None:
+        """这个 session_uid 下任意一圈的 id（导入时用来去重）。"""
+        with self.connection() as con:
+            row = con.execute("SELECT id FROM laps WHERE session_uid = ? LIMIT 1", (session_uid,)).fetchone()
+        return row["id"] if row else None
+
     def delete_lap(self, lap_id: int) -> bool:
-        with self._conn() as con:
+        with self.connection() as con:
             return con.execute("DELETE FROM laps WHERE id = ?", (lap_id,)).rowcount > 0
 
     # ------------------------------------------------------------------- read
     def list_combos(self) -> list[dict]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"""SELECT game, track, car,
                           COUNT(*) AS laps,
-                          SUM(CASE WHEN {CLEAN_SQL} THEN 1 ELSE 0 END) AS clean_laps,
-                          MIN(CASE WHEN {CLEAN_SQL} THEN lap_time_ms END) AS best_ms,
+                          SUM(CASE WHEN {CLEAN_SQL} AND {OWN_SQL} THEN 1 ELSE 0 END) AS clean_laps,
+                          MIN(CASE WHEN {CLEAN_SQL} AND {OWN_SQL} THEN lap_time_ms END) AS best_ms,
                           MAX(recorded_at) AS last_at
                    FROM laps GROUP BY game, track, car ORDER BY last_at DESC"""
             ).fetchall()
         return [dict(r) for r in rows]
 
     def list_laps(self, game: str, track: str, car: str) -> list[dict]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"SELECT {_LAP_COLUMNS} FROM laps WHERE game = ? AND track = ? AND car = ? "
                 "ORDER BY recorded_at DESC, id DESC",
@@ -142,12 +197,12 @@ class Storage:
         return [_lap_row_to_dict(r) for r in rows]
 
     def get_lap(self, lap_id: int) -> dict | None:
-        with self._conn() as con:
+        with self.connection() as con:
             row = con.execute(f"SELECT {_LAP_COLUMNS} FROM laps WHERE id = ?", (lap_id,)).fetchone()
         return _lap_row_to_dict(row) if row else None
 
     def get_samples(self, lap_id: int) -> dict[str, list]:
-        with self._conn() as con:
+        with self.connection() as con:
             rows = con.execute(
                 f"SELECT {', '.join(SAMPLE_CHANNELS)} FROM samples WHERE lap_id = ? ORDER BY idx",
                 (lap_id,),
@@ -156,10 +211,10 @@ class Storage:
         return {c: list(v) for c, v in zip(SAMPLE_CHANNELS, cols)}
 
     def best_lap(self, game: str, track: str, car: str) -> dict | None:
-        with self._conn() as con:
+        with self.connection() as con:
             row = con.execute(
                 f"SELECT {_LAP_COLUMNS} FROM laps WHERE game = ? AND track = ? AND car = ? "
-                f"AND {CLEAN_SQL} ORDER BY lap_time_ms, id LIMIT 1",
+                f"AND {CLEAN_SQL} AND {OWN_SQL} ORDER BY lap_time_ms, id LIMIT 1",
                 (game, track, car),
             ).fetchone()
         return _lap_row_to_dict(row) if row else None

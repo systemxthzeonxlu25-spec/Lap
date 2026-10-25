@@ -5,13 +5,12 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from simdrive import SESSION, drive
 
 from simtelemetry.collector import Collector
 from simtelemetry.live import LiveHub
 from simtelemetry.server import create_app
 from simtelemetry.storage import Storage
-
-from test_pipeline_sim import SESSION, drive
 
 
 @pytest.fixture(scope="module")
@@ -44,6 +43,7 @@ def test_rest_endpoints(db):
         assert c.get("/api/compare", params={"ref": 99999, "cmp": other}).status_code == 404
         assert c.get(f"/api/laps/{other}/samples").json()["t_ms"]
         assert c.get("/").status_code == 200 and c.get("/live").status_code == 200
+        assert c.get("/setups").status_code == 200 and c.get("/static/app.css").status_code == 200
         assert c.get("/vendor/uPlot.iife.min.js", follow_redirects=False).status_code in (200, 307)
         assert c.get("/vendor/evil.js").status_code == 404
 

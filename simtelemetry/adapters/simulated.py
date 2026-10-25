@@ -52,6 +52,14 @@ class DriverState:
     in_pit_lane: bool
     lap_valid: bool
 
+    def to_frame(self, tick: int) -> TelemetryFrame:
+        return TelemetryFrame(
+            speed_kmh=self.speed_kmh, throttle=self.throttle, brake=self.brake, steer=self.steer,
+            gear=self.gear, rpm=self.rpm, lap_count=self.lap_count, lap_time_ms=self.lap_time_ms,
+            pos=self.pos, in_pit=self.in_pit or self.in_pit_lane, lap_valid=self.lap_valid,
+            last_lap_ms=self.last_lap_ms, is_live=True, tick=tick,
+        )
+
 
 class SyntheticDriver:
     def __init__(self, seed: int = 7, laps_between_stops: int = 6):
@@ -203,15 +211,8 @@ class SimulatedAdapter(GameAdapter):
         assert self._driver is not None
         now = time.monotonic()
         dt, self._last = (now - self._last) * self.speed, now
-        s = self._driver.step(dt)
         self._tick += 1
-        frame = TelemetryFrame(
-            speed_kmh=s.speed_kmh, throttle=s.throttle, brake=s.brake, steer=s.steer, gear=s.gear,
-            rpm=s.rpm, lap_count=s.lap_count, lap_time_ms=s.lap_time_ms, pos=s.pos,
-            in_pit=s.in_pit or s.in_pit_lane, lap_valid=s.lap_valid, last_lap_ms=s.last_lap_ms,
-            is_live=True, tick=self._tick,
-        )
-        return self.session, frame
+        return self.session, self._driver.step(dt).to_frame(self._tick)
 
     def close(self) -> None:
         self._driver = None

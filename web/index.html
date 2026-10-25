@@ -1,3 +1,732 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>圈对比</title></head>
-<body>placeholder</body></html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>圈对比</title>
+<link rel="stylesheet" href="/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+/* ---- charts */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: center; }
+.legend span { white-space: nowrap; }
+.readout {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 16px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums;
+  font-size: 12px; color: var(--text-2); min-height: 38px;
+}
+.readout b { color: var(--text); font-weight: 600; }
+.chart { padding: 4px 4px 0; }
+.chart-title { padding: 6px 12px 0; font-size: 12px; color: var(--text-2); display: flex; justify-content: space-between; gap: 8px; }
+.chart-title .hint { white-space: nowrap; }
+.u-select { background: var(--hover); }
+.uplot { font-family: inherit; }
+.setup-btn { border: none; background: none; padding: 0; min-height: 0; color: var(--text); text-decoration: underline dotted;
+             text-underline-offset: 3px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-btn.none { color: var(--muted); }
+dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text);
+         padding: 0; width: min(520px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.dlg { padding: 16px; display: grid; gap: 10px; }
+.dlg h2 { font-size: 15px; margin: 0; }
+.dlg p { margin: 0; }
+.dlg select { width: 100%; }
+.row-end { display: flex; justify-content: flex-end; gap: 8px; }
+td.val { text-align: right; }
+td.group { font-weight: 600; color: var(--text-2); font-size: 12px; padding-top: 12px; }
+/* ---- corners */
+#corners-card .table-wrap { max-height: none; }
+#corners tr { cursor: pointer; }
+#corners tr:focus-visible { outline: 2px solid var(--axis); outline-offset: -2px; }
+#corners tr.sel { background: var(--hover); }
+#corners .sep { color: var(--muted); padding: 0 2px; }
+#corners td.slower { background: var(--slower-wash); }
+#corners td.faster { background: var(--faster-wash); }
+#corners-foot td { color: var(--text-2); border-bottom: none; }
+#corners-foot tr:last-child td { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>圈对比</h1>
+  <select id="combo" aria-label="赛道和车型"></select>
+  <span class="spacer"></span>
+  <nav><a href="/" aria-current="page">圈对比</a><a href="/setups">调教</a><a href="/live">实时面板</a></nav>
+</header>
+
+<main>
+  <section class="card" id="laps-card">
+    <div class="card-head">
+      <h2>圈列表</h2>
+      <span class="hint" id="laps-hint"></span>
+      <span style="flex:1"></span>
+      <button id="import-btn" title="导入别人导出的 .lap.gz，拿来当参考圈对比">导入圈</button>
+      <input type="file" id="import-file" accept=".gz" multiple hidden>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th title="参考圈"><span class="ref-key"></span>参考</th>
+          <th title="对比圈"><span class="cmp-key"></span>对比</th>
+          <th class="num">圈</th>
+          <th class="num">圈时</th>
+          <th class="num">差距</th>
+          <th>标记</th>
+          <th title="这一圈用的哪套调教；“猜”= 按时间自动猜的，点一下可以改">调教</th>
+          <th>时间</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="laps"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="laps-empty" hidden></div>
+  </section>
+
+  <section class="card" id="charts-card" hidden>
+    <div class="card-head">
+      <div class="legend" id="legend"></div>
+      <span class="spacer" style="flex:1"></span>
+      <span class="hint">拖动框选放大，双击还原</span>
+      <button id="csv">导出 CSV</button>
+    </div>
+    <div class="readout" id="readout"></div>
+    <div id="charts"></div>
+  </section>
+
+  <section class="card" id="corners-card" hidden>
+    <div class="card-head">
+      <h2>弯道</h2>
+      <span class="hint" id="corners-hint"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>弯</th>
+          <th class="num" id="corners-pos-head">位置</th>
+          <th class="num">入弯速度</th>
+          <th class="num">最低速度</th>
+          <th class="num">出弯速度</th>
+          <th class="num" id="corners-brake-head">刹车点</th>
+          <th class="num" title="对比圈 − 参考圈，+ = 对比圈更慢">用时差</th>
+        </tr></thead>
+        <tbody id="corners"></tbody>
+        <tfoot id="corners-foot"></tfoot>
+      </table>
+    </div>
+    <div class="empty" id="corners-empty" hidden>参考圈的速度曲线里没有找到明显减速的弯。</div>
+  </section>
+
+  <section class="card" id="setupdiff-card" hidden>
+    <div class="card-head">
+      <h2>调教差异</h2>
+      <span class="hint" id="setupdiff-hint"></span>
+    </div>
+    <div class="table-wrap" style="max-height: 420px">
+      <table><tbody id="setupdiff"></tbody></table>
+    </div>
+  </section>
+</main>
+
+<dialog id="setup-dlg">
+  <form method="dialog" class="dlg">
+    <h2 id="setup-dlg-title">这一圈用的哪套调教？</h2>
+    <p class="hint">改的是同一次上赛道的所有圈。“自动”= 取会话开始前最后修改的那套。</p>
+    <select id="setup-dlg-select" aria-label="选择调教"></select>
+    <div class="row-end">
+      <button value="cancel">取消</button>
+      <button value="ok" id="setup-dlg-ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/vendor/uPlot.iife.min.js"></script>
+<script>
+"use strict";
+
+const GAME_NAMES = { sim: "模拟数据", acc: "ACC", ac: "AC", iracing: "iRacing", lmu: "LMU" };
+const $ = (id) => document.getElementById(id);
+const state = { combo: null, laps: [], bestId: null, ref: null, cmp: null, data: null, plots: [], theo: null, corner: null };
+
+// ------------------------------------------------------------------ helpers
+function fmtLap(ms) {
+  if (ms == null || ms <= 0) return "--:--.---";
+  const m = Math.floor(ms / 60000), s = Math.floor(ms % 60000 / 1000), milli = ms % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
+}
+function fmtGap(ms) {
+  if (ms == null) return "";
+  if (ms === 0) return "—";
+  return (ms > 0 ? "+" : "−") + (Math.abs(ms) / 1000).toFixed(3);
+}
+function fmtDelta(s) {
+  if (s == null || Number.isNaN(s)) return "–";
+  return (s > 0 ? "+" : s < 0 ? "−" : "±") + Math.abs(s).toFixed(3) + " s";
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.json();
+}
+function comboKey(c) { return [c.game, c.track, c.car].join("\u0000"); }
+function comboLabel(c) { return `${GAME_NAMES[c.game] || c.game} · ${c.track} · ${c.car}（${c.laps} 圈）`; }
+function lapLabel(lap) { return `第 ${lap.lap_number} 圈 ${fmtLap(lap.lap_time_ms)}`; }
+
+// URL 里记住当前选择，刷新 / 分享链接时能回到同一个对比
+function saveUrl() {
+  const p = new URLSearchParams();
+  if (state.combo) { p.set("game", state.combo.game); p.set("track", state.combo.track); p.set("car", state.combo.car); }
+  if (state.ref) p.set("ref", state.ref);
+  if (state.cmp) p.set("cmp", state.cmp);
+  history.replaceState(null, "", "?" + p.toString());
+}
+
+// ------------------------------------------------------------------ combos
+async function loadCombos() {
+  const combos = await getJSON("/api/combos");
+  const sel = $("combo");
+  sel.innerHTML = "";
+  if (!combos.length) {
+    sel.hidden = true;
+    showLapsEmpty("还没有记录到任何圈。开着游戏跑几圈，或者用 python -m simtelemetry --game sim 生成演示数据。");
+    return;
+  }
+  const url = new URLSearchParams(location.search);
+  let pick = combos[0];
+  for (const c of combos) {
+    const o = document.createElement("option");
+    o.value = comboKey(c);
+    o.textContent = comboLabel(c);
+    sel.append(o);
+    if (c.game === url.get("game") && c.track === url.get("track") && c.car === url.get("car")) pick = c;
+  }
+  sel.value = comboKey(pick);
+  sel.onchange = () => selectCombo(combos.find((c) => comboKey(c) === sel.value), false);
+  await selectCombo(pick, true);
+}
+
+function showLapsEmpty(text) {
+  $("laps").innerHTML = "";
+  $("laps-empty").textContent = text;
+  $("laps-empty").hidden = false;
+  $("charts-card").hidden = true;
+  $("corners-card").hidden = true;
+}
+
+async function selectCombo(combo, fromUrl) {
+  state.combo = combo;
+  state.theo = null;
+  const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
+  const r = await getJSON("/api/laps?" + q);
+  state.laps = r.laps;
+  state.bestId = r.best_lap_id;
+  const url = new URLSearchParams(location.search);
+  const has = (id) => state.laps.some((l) => l.id === id);
+  const uRef = Number(url.get("ref")), uCmp = Number(url.get("cmp"));
+  if (fromUrl && has(uRef) && has(uCmp) && uRef !== uCmp) {
+    state.ref = uRef; state.cmp = uCmp;
+  } else {
+    // 默认：参考 = 个人最快干净圈；对比 = 最近的另一圈
+    state.ref = state.bestId ?? state.laps[0]?.id ?? null;
+    state.cmp = state.laps.find((l) => l.id !== state.ref)?.id ?? null;
+  }
+  renderLaps();
+  loadTheo(combo);
+  await loadCompare();
+}
+
+// 理论最快圈：每段取各干净圈里最快的一段（后端在最快圈上按弯道分段）
+async function loadTheo(combo) {
+  const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
+  let theo = null;
+  try { theo = await getJSON("/api/theoretical_best?" + q); } catch (e) { /* 只是提示，失败就不显示 */ }
+  if (state.combo !== combo) return;
+  state.theo = theo;
+  renderLapsHint();
+}
+
+// ------------------------------------------------------------------ lap table
+function renderLaps() {
+  const tbody = $("laps");
+  tbody.innerHTML = "";
+  const best = state.laps.find((l) => l.id === state.bestId);
+  $("laps-empty").hidden = true;
+  renderLapsHint();
+  if (!state.laps.length) { showLapsEmpty("这个组合下没有圈了。"); return; }
+
+  for (const lap of state.laps) {
+    const tr = document.createElement("tr");
+    const flags = [];
+    if (lap.is_out_lap) flags.push(["出站", false]);
+    if (lap.is_in_lap) flags.push(["进站", false]);
+    if (!lap.is_valid) flags.push(["无效", true]);
+    if (!lap.is_complete) flags.push(["不完整", true]);
+    if (lap.time_source === "estimated") flags.push(["估算圈时", false]);
+    if (lap.session_type === "motec") flags.push(["MoTeC 导入", false]);
+    if (lap.is_imported) flags.push(["导入", false]);
+    tr.innerHTML = `
+      <td class="pick"><input type="radio" name="ref" aria-label="设为参考圈" ${lap.id === state.ref ? "checked" : ""} ${lap.id === state.cmp ? "disabled" : ""}></td>
+      <td class="pick"><input type="radio" name="cmp" aria-label="设为对比圈" ${lap.id === state.cmp ? "checked" : ""} ${lap.id === state.ref ? "disabled" : ""}></td>
+      <td class="num">${lap.lap_number}</td>
+      <td class="num ${lap.id === state.bestId ? "best" : ""}">${fmtLap(lap.lap_time_ms)}</td>
+      <td class="num">${best && lap.is_clean ? fmtGap(lap.lap_time_ms - best.lap_time_ms) : ""}</td>
+      <td>${flags.map(([t, bad]) => `<span class="chip${bad ? " bad" : ""}">${t}</span>`).join("")}</td>
+      <td>${setupCell(lap)}</td>
+      <td>${fmtDate(lap.recorded_at)}</td>
+      <td><button class="del exp" title="导出这一圈（.lap.gz，发给别人对比）" aria-label="导出第 ${lap.lap_number} 圈">⤓</button><button class="del" title="删除这一圈" aria-label="删除第 ${lap.lap_number} 圈">✕</button></td>`;
+    const [refIn, cmpIn] = tr.querySelectorAll("input");
+    refIn.onchange = () => { state.ref = lap.id; renderLaps(); loadCompare(); };
+    cmpIn.onchange = () => { state.cmp = lap.id; renderLaps(); loadCompare(); };
+    tr.querySelector(".del:not(.exp)").onclick = () => deleteLap(lap);
+    tr.querySelector(".exp").onclick = () => exportLap(lap);
+    tr.querySelector(".setup-btn").onclick = () => chooseSetup(lap);
+    tbody.append(tr);
+  }
+}
+
+function renderLapsHint() {
+  const best = state.laps.find((l) => l.id === state.bestId), t = state.theo, el = $("laps-hint");
+  el.textContent = best
+    ? `${state.laps.length} 圈 · 最快干净圈 ${fmtLap(best.lap_time_ms)}`
+    : `${state.laps.length} 圈 · 还没有干净圈（有效、完整、非出站/进站）`;
+  el.title = "";
+  if (best && t && t.theoretical_ms != null && t.best_ms === best.lap_time_ms) {
+    el.textContent += ` · 理论最快圈 ${fmtLap(t.theoretical_ms)}` +
+      (t.gain_ms > 0 ? `，比最快圈快 ${(t.gain_ms / 1000).toFixed(3)} s` : "（就是最快圈）");
+    el.title = `把 ${t.laps} 个干净圈按弯道分成 ${t.segments.length} 段，每段取最快的那一圈再加起来（分段在最快圈上划分）`;
+  }
+}
+
+// ------------------------------------------------------------------ 导出 / 导入单圈
+function exportLap(lap) {
+  const note = prompt("给这一圈附一句备注（可以留空），比如车手名、车队、用的调教：", "");
+  if (note === null) return;
+  location.href = `/api/laps/${lap.id}/export?note=${encodeURIComponent(note)}`;
+}
+
+$("import-btn").onclick = () => $("import-file").click();
+$("import-file").onchange = async (ev) => {
+  const files = [...ev.target.files];
+  ev.target.value = "";
+  let last = null;
+  const errors = [];
+  for (const f of files) {
+    try {
+      const r = await fetch("/api/laps/import", { method: "POST", body: f, headers: { "Content-Type": "application/gzip" } });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail || r.status);
+      last = body;
+    } catch (e) { errors.push(`${f.name}：${e.message}`); }
+  }
+  if (errors.length) alert("有文件没能导入：\n" + errors.join("\n"));
+  if (!last) return;
+  // 切到导入的那一圈所在的赛道+车型，把它设成参考圈
+  const lap = last.lap;
+  history.replaceState(null, "", "?" + new URLSearchParams({ game: lap.game, track: lap.track, car: lap.car }));
+  await loadCombos();
+  if (state.laps.some((l) => l.id === last.id)) {
+    if (state.cmp === last.id) state.cmp = state.ref;
+    state.ref = last.id;
+    if (state.cmp === state.ref) state.cmp = state.laps.find((l) => l.id !== last.id)?.id ?? null;
+    renderLaps();
+    await loadCompare();
+  }
+};
+
+async function deleteLap(lap) {
+  if (!confirm(`删除${lapLabel(lap)}？删除后不能恢复。`)) return;
+  await fetch(`/api/laps/${lap.id}`, { method: "DELETE" });
+  if (state.ref === lap.id) state.ref = null;
+  if (state.cmp === lap.id) state.cmp = null;
+  await selectCombo(state.combo, false);
+}
+
+// ------------------------------------------------------------------ compare
+async function loadCompare() {
+  saveUrl();
+  if (!state.ref || !state.cmp) {
+    $("charts-card").hidden = true;
+    $("corners-card").hidden = true;
+    $("setupdiff-card").hidden = true;
+    destroyPlots();
+    return;
+  }
+  const points = Math.max(300, Math.min(3000, Math.round(document.querySelector("main").clientWidth * 1.5 || 1500)));
+  const want = [state.ref, state.cmp].join();
+  const data = await getJSON(`/api/compare?ref=${state.ref}&cmp=${state.cmp}&points=${points}`);
+  if ([state.ref, state.cmp].join() !== want) return;     // 加载期间用户又换了圈
+  state.data = data;
+  $("charts-card").hidden = false;
+  state.corner = null;
+  renderLegend();
+  buildPlots();
+  renderCorners();
+  renderSetupDiff();
+}
+
+// ------------------------------------------------------------------ 圈 ↔ 调教
+function setupCell(lap) {
+  const s = lap.setup;
+  if (lap.is_imported && !s) return `<span class="hint">—</span>`;
+  if (!s || s.version_id == null) {
+    return `<button class="setup-btn none" title="${s ? "已标记为没有 / 不记得" : "没有猜到，点一下选"}">${s ? "无" : "选择…"}</button>`;
+  }
+  const tag = s.source === "auto" ? ' <span class="chip" title="按时间自动猜的，点名字可以改">猜</span>' : "";
+  return `<button class="setup-btn" title="${esc(s.name)}（${esc(s.track)}）">${esc(s.name)}</button>${tag}`;
+}
+
+async function chooseSetup(lap) {
+  const c = state.combo;
+  const q = new URLSearchParams({ game: c.game, car: c.car, track: c.track });
+  const choices = await getJSON("/api/setup_choices?" + q);
+  const sel = $("setup-dlg-select");
+  const cur = lap.setup;
+  sel.innerHTML = `<option value="auto">自动猜测</option><option value="none">没有 / 不记得</option>`;
+  for (const [label, items] of [["这条赛道", choices.filter((x) => x.track_match)], ["其他赛道", choices.filter((x) => !x.track_match)]]) {
+    if (!items.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    for (const x of items) {
+      const o = document.createElement("option");
+      o.value = String(x.version_id);
+      o.textContent = `${x.name}（${x.track} · ${fmtDate(x.file_mtime)}）`;
+      g.append(o);
+    }
+    sel.append(g);
+  }
+  sel.value = !cur ? "auto" : cur.source === "auto" ? "auto" : cur.version_id == null ? "none" : String(cur.version_id);
+  if (!choices.length) $("setup-dlg-title").textContent = "调教库里没有这辆车的调教";
+  else $("setup-dlg-title").textContent = "这一圈用的哪套调教？";
+  const dlg = $("setup-dlg");
+  dlg.returnValue = "";
+  dlg.showModal();
+  await new Promise((r) => dlg.addEventListener("close", r, { once: true }));
+  if (dlg.returnValue !== "ok") return;
+  const v = sel.value;
+  const body = v === "auto" ? { auto: true } : { version_id: v === "none" ? null : Number(v) };
+  const r = await fetch(`/api/sessions/${encodeURIComponent(lap.session_uid)}/setup`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { alert("保存失败：" + r.status); return; }
+  await refreshLaps();
+}
+
+// 重新拉圈列表（保留当前的参考 / 对比选择）
+async function refreshLaps() {
+  const c = state.combo;
+  const r = await getJSON("/api/laps?" + new URLSearchParams({ game: c.game, track: c.track, car: c.car }));
+  state.laps = r.laps;
+  state.bestId = r.best_lap_id;
+  renderLaps();
+  renderSetupDiff();
+}
+
+async function renderSetupDiff() {
+  const card = $("setupdiff-card"), body = $("setupdiff"), hint = $("setupdiff-hint");
+  const ref = state.laps.find((l) => l.id === state.ref), cmp = state.laps.find((l) => l.id === state.cmp);
+  const a = ref?.setup?.version_id, b = cmp?.setup?.version_id;
+  if (a == null || b == null) { card.hidden = true; return; }
+  card.hidden = false;
+  body.innerHTML = "";
+  const guessed = [ref, cmp].some((l) => l.setup.source === "auto") ? "（含自动猜测，可在圈列表里改）" : "";
+  if (a === b) {
+    hint.textContent = `两圈用的是同一套调教：${ref.setup.name}${guessed}`;
+    return;
+  }
+  hint.textContent = `参考：${ref.setup.name} → 对比：${cmp.setup.name}${guessed}`;
+  let d;
+  try { d = await getJSON(`/api/setups/diff?a=${a}&b=${b}`); } catch (e) {
+    hint.textContent += "（调教库没有启用，看不到差异）";
+    return;
+  }
+  if (state.ref !== ref.id || state.cmp !== cmp.id) return;
+  if (!d.changes.length) { hint.textContent += " · 两套调教的设置完全一样"; return; }
+  body.insertAdjacentHTML("beforeend", `<tr><th>项目</th><th class="num"><span class="ref-key"></span>参考</th><th></th><th><span class="cmp-key"></span>对比</th><th class="num">变化</th></tr>`);
+  let group = null;
+  for (const c of d.changes) {
+    if (c.group !== group) { group = c.group; body.insertAdjacentHTML("beforeend", `<tr><td class="group" colspan="5">${esc(group)}</td></tr>`); }
+    const clicks = c.clicks && !["策略", "其他"].includes(c.group) ? `${c.clicks > 0 ? "+" : "−"}${Math.abs(c.clicks)} 格` : "";
+    body.insertAdjacentHTML("beforeend", `<tr><td>${esc(c.label)}</td><td class="val">${esc(c.a ? c.a.display : "（无）")}</td>
+      <td class="hint">→</td><td>${esc(c.b ? c.b.display : "（无）")}</td><td class="num">${clicks}</td></tr>`);
+  }
+}
+
+function renderLegend() {
+  const d = state.data;
+  const total = d.delta[d.delta.length - 1];
+  $("legend").innerHTML = `
+    <span><span class="ref-key"></span>参考：${lapLabel(d.ref.lap)}</span>
+    <span><span class="cmp-key"></span>对比：${lapLabel(d.cmp.lap)}</span>
+    <span>终点差距 <b>${fmtDelta(total)}</b>${total > 0 ? "（对比圈更慢）" : total < 0 ? "（对比圈更快）" : ""}</span>`;
+}
+
+// 横轴刻度取整：米用 50/100/200/250/500/1000…，百分比用 1/2/5/10/20/25
+function xSplits(u, ai, min, max) {
+  const len = state.data.track_length_m, k = len || 100;
+  const span = (max - min) * k, target = Math.max(3, Math.floor(u.width / 90));
+  const steps = len ? [10, 20, 50, 100, 200, 250, 500, 1000, 2000] : [1, 2, 5, 10, 20, 25, 50];
+  const step = steps.find((st) => span / st <= target) || steps[steps.length - 1];
+  const out = [];
+  for (let v = Math.ceil(min * k / step) * step; v <= max * k + 1e-9; v += step) out.push(v / k);
+  return out;
+}
+
+function xInfo() {
+  const len = state.data.track_length_m;
+  return len
+    ? { len, unit: "m", fmt: (x) => `${Math.round(x * len)} m`, tick: (x) => String(Math.round(x * len)) }
+    : { len: null, unit: "%", fmt: (x) => `${(x * 100).toFixed(1)}%`, tick: (x) => `${Math.round(x * 100)}` };
+}
+
+// 五张图共用一个横轴；颜色只表示“哪一圈”，油门在 0 以上、刹车在 0 以下
+const CHARTS = [
+  { key: "delta", title: "时间差 delta（s）", hint: "0 以上 = 对比圈更慢", height: 150 },
+  { key: "speed", title: "速度（km/h）", height: 190 },
+  { key: "pedals", title: "油门（上）/ 刹车（下）（%）", height: 170 },
+  { key: "gear", title: "挡位", height: 140 },
+  { key: "steer", title: "转向（左右满舵 = ±100%）", hint: "正负方向取决于游戏", height: 130 },
+];
+
+function destroyPlots() {
+  for (const p of state.plots) p.destroy();
+  state.plots = [];
+  $("charts").innerHTML = "";
+}
+
+function buildPlots() {
+  destroyPlots();
+  const d = state.data, x = d.x, xi = xInfo();
+  const colors = { ref: css("--ref"), cmp: css("--cmp"), text: css("--text"), muted: css("--muted"),
+                   grid: css("--grid"), axis: css("--axis"), slowerWash: css("--slower-wash"), fasterWash: css("--faster-wash") };
+  const pct = (arr, k = 100) => arr.map((v) => (v == null ? null : v * k));
+  // 踏板：松开（≈0）的地方不画，只保留离开 / 回到 0 的那一个点，否则几条 0 线叠在一起像一根坐标轴
+  const on = (v) => v != null && v > 0.005;
+  const pedal = (arr, sign) => arr.map((v, i) => (on(v) || on(arr[i - 1]) || on(arr[i + 1]) ? sign * (v || 0) * 100 : null));
+  const pos0 = d.delta.map((v) => (v == null ? null : Math.max(v, 0)));
+  const neg0 = d.delta.map((v) => (v == null ? null : Math.min(v, 0)));
+  const line = (stroke, extra = {}) => ({ stroke, width: 2, points: { show: false }, ...extra });
+  const stepped = uPlot.paths.stepped({ align: 1 });
+
+  const series = {
+    delta: [[pos0, neg0, d.delta], [
+      { stroke: "transparent", fill: colors.slowerWash, fillTo: 0, width: 0, points: { show: false } },
+      { stroke: "transparent", fill: colors.fasterWash, fillTo: 0, width: 0, points: { show: false } },
+      line(colors.text, { width: 1.5 }),
+    ]],
+    speed: [[d.ref.speed, d.cmp.speed], [line(colors.ref), line(colors.cmp)]],
+    pedals: [[pedal(d.ref.throttle, 1), pedal(d.cmp.throttle, 1), pedal(d.ref.brake, -1), pedal(d.cmp.brake, -1)],
+             [line(colors.ref), line(colors.cmp), line(colors.ref), line(colors.cmp)]],
+    gear: [[d.ref.gear, d.cmp.gear], [line(colors.ref, { paths: stepped }), line(colors.cmp, { paths: stepped })]],
+    steer: [[pct(d.ref.steer), pct(d.cmp.steer)], [line(colors.ref), line(colors.cmp)]],
+  };
+  const yRange = {
+    delta: (u, min, max) => { const m = Math.max(0.05, Math.abs(min), Math.abs(max)) * 1.1; return [-m, m]; },
+    pedals: () => [-105, 105],
+    steer: (u, min, max) => { const m = Math.max(10, Math.abs(min), Math.abs(max)) * 1.1; return [-m, m]; },
+    gear: (u, min, max) => [Math.min(0, min) - 0.5, max + 0.5],
+  };
+  const ySplits = {
+    gear: (u, ai, min, max) => { const out = []; for (let g = Math.ceil(min); g <= max; g++) out.push(g); return out; },
+  };
+  const yValues = {
+    pedals: (u, ticks) => ticks.map((t) => Math.abs(t)),
+    gear: (u, ticks) => ticks.map((t) => (Number.isInteger(t) ? (t < 0 ? "R" : t === 0 ? "N" : t) : "")),
+  };
+
+  const width = Math.max(280, $("charts").clientWidth - 8);
+  const sync = uPlot.sync("lap-compare");
+  const axisBase = { stroke: colors.muted, grid: { stroke: colors.grid, width: 1 }, ticks: { stroke: colors.axis, width: 1, size: 4 },
+                     font: "11px system-ui, sans-serif" };
+
+  CHARTS.forEach((c, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "chart";
+    wrap.innerHTML = `<div class="chart-title"><span>${c.title}</span>${c.hint ? `<span class="hint">${c.hint}</span>` : ""}</div>`;
+    $("charts").append(wrap);
+    const [ys, ser] = series[c.key];
+    const last = i === CHARTS.length - 1;
+    const opts = {
+      width, height: c.height,
+      legend: { show: false },
+      cursor: { y: false, sync: { key: sync.key, setSeries: false, scales: ["x", null] }, drag: { x: true, y: false },
+                points: { size: 8, width: 2, stroke: css("--surface") } },
+      scales: { x: { time: false }, y: { range: yRange[c.key] } },
+      axes: [
+        { ...axisBase, splits: xSplits, values: (u, ticks) => ticks.map(xi.tick), size: last ? 34 : 8, ...(last ? {} : { values: () => [] }),
+          label: last ? (xi.len ? "距离（m）" : "圈内位置（%）") : undefined, labelSize: last ? 16 : 0, labelFont: "11px system-ui, sans-serif" },
+        { ...axisBase, size: 44, values: yValues[c.key], splits: ySplits[c.key] },
+      ],
+      series: [{}, ...ser],
+      hooks: { setCursor: [(u) => updateReadout(u.cursor.idx)],
+               ...(c.key === "delta" ? { drawClear: [drawCornerBands], draw: [drawCornerLabels] } : {}) },
+    };
+    state.plots.push(new uPlot(opts, [x, ...ys], wrap));
+  });
+  // 框选放大 / 双击还原：任意一张图改了 x 范围，同步到其它图
+  for (const p of state.plots) {
+    p.hooks.setScale = [(u, key) => {
+      if (key !== "x") return;
+      const { min, max } = u.scales.x;
+      if (state.corner && (min !== state.corner.zoom[0] || max !== state.corner.zoom[1])) clearCornerSel();   // 框选 / 双击改了范围
+      for (const o of state.plots) if (o !== u && (o.scales.x.min !== min || o.scales.x.max !== max)) o.setScale("x", { min, max });
+    }];
+  }
+  updateReadout(null);
+}
+
+// delta 图上淡淡地标出弯道段（底色）和弯名（顶部小字）
+function cornerSegs() { return (state.data?.corners?.segments || []).filter((s) => s.kind === "corner"); }
+function drawCornerBands(u) {
+  const ctx = u.ctx, { top, height } = u.bbox;
+  ctx.save();
+  ctx.fillStyle = css("--hover");
+  for (const s of cornerSegs()) {
+    const a = u.valToPos(s.start, "x", true), b = u.valToPos(s.end, "x", true);
+    ctx.fillRect(a, top, b - a, height);
+  }
+  ctx.restore();
+}
+function drawCornerLabels(u) {
+  const ctx = u.ctx, { left, top, width } = u.bbox, px = uPlot.pxRatio;
+  ctx.save();
+  ctx.fillStyle = css("--muted");
+  ctx.font = `${11 * px}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  let lastRight = -Infinity;
+  for (const s of cornerSegs()) {
+    const x = u.valToPos(s.apex, "x", true), w = ctx.measureText(s.name).width;
+    if (x < left || x > left + width || x - w / 2 < lastRight + 4 * px) continue;   // 太挤就跳过
+    ctx.fillText(s.name, x, top + 3 * px);
+    lastRight = x + w / 2;
+  }
+  ctx.restore();
+}
+
+// ------------------------------------------------------------------ corners
+function renderCorners() {
+  const d = state.data, ct = d.corners, xi = xInfo();
+  const segs = ct ? ct.segments : [];
+  const corners = segs.filter((s) => s.kind === "corner");
+  const tbody = $("corners"), foot = $("corners-foot");
+  tbody.innerHTML = ""; foot.innerHTML = "";
+  $("corners-card").hidden = false;
+  $("corners-empty").hidden = corners.length > 0;
+  $("corners-pos-head").textContent = xi.len ? "位置（m）" : "位置（%）";
+  $("corners-brake-head").textContent = xi.len ? "刹车点（m）" : "刹车点（%）";
+  $("corners-hint").textContent = corners.length
+    ? "每格：参考 · 对比；用时差 = 对比 − 参考（+ = 对比圈更慢）；点一行放大到该弯"
+    : "";
+  const p = (x) => (x == null ? "–" : xi.len ? String(Math.round(x * xi.len)) : (x * 100).toFixed(1));
+  const k = (v) => (v == null ? "–" : String(Math.round(v)));
+  const pair = (a, b) => `${a}<span class="sep">·</span>${b}`;
+  const ms = (v) => (v == null ? "–" : fmtDelta(v / 1000).replace(" s", ""));
+  const wash = (v) => (v == null || Math.abs(v) < 50 ? "" : v > 0 ? "slower" : "faster");
+
+  for (const s of corners) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    tr.title = `${s.name}：${xi.fmt(s.start)} – ${xi.fmt(s.end)}`;
+    tr.innerHTML = `
+      <td>${s.name}</td>
+      <td class="num">${p(s.apex)}</td>
+      <td class="num">${pair(k(s.ref.entry_kmh), k(s.cmp.entry_kmh))}</td>
+      <td class="num">${pair(k(s.ref.min_kmh), k(s.cmp.min_kmh))}</td>
+      <td class="num">${pair(k(s.ref.exit_kmh), k(s.cmp.exit_kmh))}</td>
+      <td class="num">${pair(p(s.ref.brake_pos), p(s.cmp.brake_pos))}</td>
+      <td class="num ${wash(s.delta_ms)}">${ms(s.delta_ms)}</td>`;
+    tr.onclick = () => zoomTo(s, tr);
+    tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); zoomTo(s, tr); } };
+    tbody.append(tr);
+  }
+  if (corners.length) {
+    const straights = segs.filter((s) => s.kind === "straight");
+    const sum = (arr) => arr.reduce((a, s) => a + (s.delta_ms || 0), 0);
+    foot.innerHTML = `
+      <tr><td colspan="6">弯道合计（${corners.length} 个）</td><td class="num">${ms(sum(corners))}</td></tr>
+      <tr><td colspan="6">直道合计（${straights.length} 段，弯与弯之间）</td><td class="num">${ms(sum(straights))}</td></tr>
+      <tr><td colspan="6">整圈</td><td class="num">${ms(ct.total_delta_ms)}</td></tr>`;
+  }
+}
+
+// 点弯道行：所有图放大到该弯（setScale 钩子会同步到其它图）；再点一次还原
+function zoomTo(seg, tr) {
+  const p = state.plots[0];
+  if (!p) return;
+  const again = state.corner?.seg === seg;
+  clearCornerSel();
+  if (again) {
+    p.setScale("x", { min: state.data.x[0], max: state.data.x[state.data.x.length - 1] });
+    return;
+  }
+  const pad = (seg.end - seg.start) * 0.15;
+  const zoom = [Math.max(0, seg.start - pad), Math.min(1, seg.end + pad)];
+  state.corner = { seg, zoom };
+  tr.classList.add("sel");
+  p.setScale("x", { min: zoom[0], max: zoom[1] });
+}
+function clearCornerSel() {
+  state.corner = null;
+  for (const r of $("corners").children) r.classList.remove("sel");
+}
+
+function updateReadout(idx) {
+  const d = state.data, el = $("readout");
+  if (!d) return;
+  if (idx == null) { el.innerHTML = `<span>鼠标移到图上（手机上点一下）查看该位置的数值</span>`; return; }
+  const xi = xInfo();
+  const g = (v) => (v == null ? "–" : v < 0 ? "R" : v === 0 ? "N" : v);
+  const n = (v, k = 1, f = 0) => (v == null ? "–" : (v * k).toFixed(f));
+  el.innerHTML = `
+    <span>位置 <b>${xi.fmt(d.x[idx])}</b></span>
+    <span>delta <b>${fmtDelta(d.delta[idx])}</b></span>
+    <span><span class="ref-key"></span>速度 <b>${n(d.ref.speed[idx])}</b> · <span class="cmp-key"></span><b>${n(d.cmp.speed[idx])}</b></span>
+    <span><span class="ref-key"></span>油门 <b>${n(d.ref.throttle[idx], 100)}%</b> · <span class="cmp-key"></span><b>${n(d.cmp.throttle[idx], 100)}%</b></span>
+    <span><span class="ref-key"></span>刹车 <b>${n(d.ref.brake[idx], 100)}%</b> · <span class="cmp-key"></span><b>${n(d.cmp.brake[idx], 100)}%</b></span>
+    <span><span class="ref-key"></span>挡位 <b>${g(d.ref.gear[idx])}</b> · <span class="cmp-key"></span><b>${g(d.cmp.gear[idx])}</b></span>`;
+}
+
+// ------------------------------------------------------------------ CSV
+function exportCsv() {
+  const d = state.data;
+  if (!d) return;
+  const xi = xInfo();
+  const ch = ["speed", "throttle", "brake", "steer", "gear", "rpm"];
+  const head = [xi.len ? "distance_m" : "position_pct", ...ch.map((c) => "ref_" + c), ...ch.map((c) => "cmp_" + c), "delta_s"];
+  const rows = [head.join(",")];
+  d.x.forEach((x, i) => {
+    const pos = xi.len ? (x * xi.len).toFixed(1) : (x * 100).toFixed(3);
+    rows.push([pos, ...ch.map((c) => d.ref[c][i] ?? ""), ...ch.map((c) => d.cmp[c][i] ?? ""), d.delta[i] ?? ""].join(","));
+  });
+  const blob = new Blob(["﻿" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `lap_${d.ref.lap.lap_number}_vs_${d.cmp.lap.lap_number}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("csv").onclick = exportCsv;
+
+// ------------------------------------------------------------------ resize / theme
+let resizeTimer = 0;
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const w = Math.max(280, $("charts").clientWidth - 8);
+    for (const p of state.plots) p.setSize({ width: w, height: p.height });
+  }, 100);
+}).observe($("charts"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => state.data && buildPlots());
+
+loadCombos().catch((e) => showLapsEmpty("加载失败：" + e.message));
+</script>
+</body>
+</html>

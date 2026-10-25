@@ -1,0 +1,69 @@
+name: Release
+
+# 两种发布方式（都会先跑完整 CI：测试 + 打包 + 冒烟测试，再创建 GitHub Release，附上 exe 和 SHA256）：
+# - 推一个版本标签：git tag v0.1.0 && git push origin v0.1.0
+# - 在 Actions 页面手动运行（选好分支）：版本号取代码里的 __version__，由这里创建 v<版本> 标签；已存在就拒绝
+# 发布说明取自 CHANGELOG.md 里 “## v<版本>” 那一节；0.x 版本标为预发布。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: 创建 GitHub Release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查标签和代码里的版本号一致
+        id: ver
+        run: |
+          code=$(python3 -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('simtelemetry/__init__.py', encoding='utf-8').read()).group(1))")
+          proj=$(python3 -c "import re;print(re.search(r'^version = \"(.+?)\"', open('pyproject.toml', encoding='utf-8').read(), re.M).group(1))")
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then tag="v$code"; else tag="$GITHUB_REF_NAME"; fi
+          ver="${tag#v}"
+          if [ "$ver" != "$code" ] || [ "$ver" != "$proj" ]; then
+            echo "::error::标签 $tag 和代码版本（__init__.py: $code，pyproject.toml: $proj）不一致"; exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: 从 CHANGELOG.md 取发布说明
+        run: |
+          awk -v h="## v${{ steps.ver.outputs.version }}" '
+            index($0, h) == 1 { on = 1; next }
+            on && /^## / { exit }
+            on { print }' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "::error::CHANGELOG.md 里没有 v${{ steps.ver.outputs.version }} 的说明"; exit 1; fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: Lap-windows
+          path: dist
+      - name: 重命名并算校验和
+        run: |
+          exe="Lap-${{ steps.ver.outputs.version }}-windows-x64.exe"
+          mv dist/Lap.exe "dist/$exe"
+          (cd dist && sha256sum "$exe" > "$exe.sha256")
+          ls -l dist
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.ver.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "::error::$tag 已经发布过了，先改版本号"; exit 1; fi
+          pre=""
+          case "${{ steps.ver.outputs.version }}" in 0.*|*-*) pre="--prerelease" ;; esac
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            target="--target $GITHUB_SHA"            # 标签不存在：在当前提交上创建
+          else
+            target="--verify-tag"
+          fi
+          gh release create "$tag" dist/* --title "Lap $tag" --notes-file notes.md $target $pre

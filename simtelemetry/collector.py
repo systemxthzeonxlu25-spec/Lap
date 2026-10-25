@@ -2,6 +2,8 @@
 
 - 游戏没开：安静等待，每 retry_s 秒重试一次（只在状态变化时打一条日志）。
 - 存库在单独的写线程里做，避免一圈几千行的 INSERT 卡住 50 Hz 采样。
+- 录制 / 回放（recording.py、replay.py）通过三个可选参数接进来：wrap 包装每个新建的适配器，
+  adapters 代替“按游戏创建适配器”，clock 代替 time.monotonic（录制的时间戳 = 切圈用的时间，回放时原样还原）。
 """
 from __future__ import annotations
 
@@ -9,8 +11,9 @@ import logging
 import queue
 import threading
 import time
+from typing import Callable
 
-from .adapters import create_adapter, detect_running_games
+from .adapters import create_adapter, detect_running_games, is_implemented
 from .adapters.base import AdapterDisconnected, GameAdapter
 from .analysis import LiveReference
 from .live import LiveHub
@@ -23,21 +26,29 @@ log = logging.getLogger(__name__)
 
 class Collector:
     def __init__(self, storage: Storage, hub: LiveHub, game: str = "auto", rate_hz: float = 50.0,
-                 retry_s: float = 3.0, sim_speed: float = 1.0, stale_s: float = 5.0):
+                 retry_s: float = 3.0, sim_speed: float = 1.0, stale_s: float = 5.0,
+                 wrap: Callable[[GameAdapter], GameAdapter] | None = None,
+                 adapters: Callable[[], list[GameAdapter]] | None = None,
+                 clock: Callable[[], float] = time.monotonic):
         self.storage = storage
         self.hub = hub
         self.game = game
-        self.period = 1.0 / rate_hz
+        self.period = 1.0 / rate_hz        # rate_hz = inf（回放）→ 不等待，节拍由数据源决定
         self.retry_s = retry_s
         self.sim_speed = sim_speed
         self.stale_s = stale_s
+        self._wrap = wrap
+        self._adapters = adapters
+        self._clock = clock
 
         self.recorder = LapRecorder()
         self.adapter: GameAdapter | None = None
         self._ref: LiveReference | None = None
         self._ref_combo: tuple | None = None
+        self._ref_lock = threading.Lock()
         self._session: SessionInfo | None = None
         self._last_saved: dict | None = None
+        self._unavailable_logged: set[str] = set()
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -62,13 +73,34 @@ class Collector:
 
     # ------------------------------------------------------------------- loop
     def _candidates(self) -> list[GameAdapter]:
-        if self.game != "auto":
-            return [create_adapter(self.game, sim_speed=self.sim_speed)]
-        return [create_adapter(g) for g in detect_running_games()]
+        if self._adapters is not None:
+            return self._adapters()
+        games = [self.game] if self.game != "auto" else detect_running_games()
+        out: list[GameAdapter] = []
+        for g in games:
+            if not is_implemented(g):
+                if g not in self._unavailable_logged:   # 每个游戏只提示一次，不刷屏
+                    self._unavailable_logged.add(g)
+                    log.warning("检测到 %s，但它的适配器还没有实现，跳过", g)
+                continue
+            try:
+                out.append(create_adapter(g, sim_speed=self.sim_speed))
+            except Exception:                       # 适配器导入/构造出错（比如缺依赖）也不能拖垮采集线程
+                if g not in self._unavailable_logged:
+                    self._unavailable_logged.add(g)
+                    log.exception("创建 %s 适配器失败，跳过", g)
+        return out
 
     def _try_connect(self) -> GameAdapter | None:
-        for adapter in self._candidates():
+        try:
+            candidates = self._candidates()
+        except Exception:                           # 比如枚举进程失败
+            log.exception("查找游戏时出错")
+            return None
+        for adapter in candidates:
             try:
+                if self._wrap is not None:
+                    adapter = self._wrap(adapter)
                 if adapter.connect():
                     return adapter
             except Exception:                       # 适配器自身的 bug 不能拖垮采集线程
@@ -79,7 +111,7 @@ class Collector:
     def _run(self) -> None:
         waiting_logged = False
         next_t = time.perf_counter()
-        last_tick_change = time.monotonic()
+        last_tick_change = self._clock()
         last_tick = None
         while not self._stop.is_set():
             if self.adapter is None:
@@ -95,11 +127,11 @@ class Collector:
                 log.info("已连接：%s", self.adapter.display_name)
                 self.hub.replace(state="connected", game=self.adapter.name,
                                  game_name=self.adapter.display_name)
-                last_tick_change = time.monotonic()
+                last_tick_change = self._clock()
                 last_tick = None
                 next_t = time.perf_counter()
 
-            now = time.monotonic()
+            now = self._clock()
             try:
                 res = self.adapter.read()
             except AdapterDisconnected as e:
@@ -159,14 +191,15 @@ class Collector:
 
     # ------------------------------------------------------------- reference
     def _load_reference(self, session: SessionInfo) -> None:
-        self._ref = None
-        self._ref_combo = session.combo
-        try:
-            best = self.storage.best_lap(*session.combo)
-            if best:
-                self._ref = LiveReference(best, self.storage.get_samples(best["id"]))
-        except Exception:
-            log.exception("加载参考圈失败")
+        with self._ref_lock:
+            self._ref = None
+            self._ref_combo = session.combo
+            try:
+                best = self.storage.best_lap(*session.combo)
+                if best:
+                    self._ref = LiveReference(best, self.storage.get_samples(best["id"]))
+            except Exception:
+                log.exception("加载参考圈失败")
 
     def _queue_laps(self, laps: list[LapRecord]) -> None:
         for lap in laps:
@@ -187,13 +220,22 @@ class Collector:
                 "is_valid": lap.is_valid, "is_out_lap": lap.is_out_lap, "is_in_lap": lap.is_in_lap,
                 "is_complete": lap.is_complete, "is_clean": lap.is_clean,
             }
+            if lap.is_clean:
+                self._maybe_update_reference(lap, lap_id)
+
+    def _maybe_update_reference(self, lap: LapRecord, lap_id: int) -> None:
+        # 加锁：避免写线程刚判断完“同一赛道车型”，采集线程就切换了会话，结果参考圈被换成别的赛道的
+        with self._ref_lock:
             ref = self._ref
-            if lap.is_clean and lap.session.combo == self._ref_combo and \
-                    (ref is None or lap.lap_time_ms < ref.lap_time_ms):
+            if lap.session.combo != self._ref_combo or (ref is not None and lap.lap_time_ms >= ref.lap_time_ms):
+                return
+            try:
                 lap_row = self.storage.get_lap(lap_id)
                 if lap_row:
                     self._ref = LiveReference(lap_row, self.storage.get_samples(lap_id))
                     log.info("新的个人最快圈，实时 delta 参考已更新")
+            except Exception:
+                log.exception("更新参考圈失败")
 
     # ---------------------------------------------------------------- publish
     def _publish_frame(self, session: SessionInfo | None, f, now: float) -> None:

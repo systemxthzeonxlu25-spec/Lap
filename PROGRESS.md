@@ -8,8 +8,8 @@
 ```bash
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
-python -m simtelemetry                 # 自动识别游戏（目前只有 sim 能真正采集，见“做到一半”）
-python -m pytest -q tests              # 11 个测试，全部通过
+python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
+python -m pytest -q                    # 123 个测试，全部通过（另有 4 个只在 Windows 上跑；配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -23,17 +23,38 @@ python -m pytest -q tests              # 11 个测试，全部通过
 | `simtelemetry/recorder.py` | 切圈 + 打标记：已完成圈数 +1 = 跨圈；有效/出站/进站/完整性标记；等待游戏给出圈时（最多 3 s，否则用估算值）；起终点附近位置回绕处理；计时先于圈数归零时暂存几帧 |
 | `simtelemetry/storage.py` | SQLite（WAL）：`laps` 表（一圈一条）+ `samples` 表（采样点，删除圈时级联删除）；“干净圈” = 有效 ∧ 完整 ∧ 非出站 ∧ 非进站，只有干净圈参与最快圈 |
 | `simtelemetry/analysis.py` | 按赛道距离对齐：t(d) 插值、多通道重采样（挡位用阶梯取值）、delta 曲线（正 = 对比圈更慢）、`LiveReference`（实时 delta，O(log n) 查询） |
+| `simtelemetry/corners.py` | 分弯道（纯函数）：`detect_corners()` 在参考圈速度曲线上找弯（速度谷底，比弯前最高速低 ≥ 15 km/h 或 8%，带回差，60 m 内合并）；`build_segments()` 弯道段 + 直道段首尾相接覆盖整圈；`corner_table()` 逐弯入弯/最低/出弯速度、刹车点、段用时差（各段之和 = 终点 delta）；`theoretical_best()` 理论最快圈（分段取自最快圈，按各圈归一化位置对齐） |
 | `simtelemetry/collector.py` | 采集线程：约 50 Hz 循环，游戏没开时每 3 s 安静重试，数据停止更新时检查进程是否退出；单独的写库线程；新最快圈出现后自动更新实时参考圈 |
 | `simtelemetry/live.py` | `LiveHub`：采集线程 → WebSocket 的最新快照 |
-| `simtelemetry/server.py` | FastAPI：`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
+| `simtelemetry/server.py` | FastAPI：`/setups` 页、`/api/setups*`（列表、扫描、文件详情/备注标签、版本换算值、原始 JSON 下载、对比）、`/api/combos`、`/api/laps`、`/api/laps/{id}`、`/api/laps/{id}/samples`、`DELETE /api/laps/{id}`、`/api/compare`、`/api/status`、`WS /ws/live`、`/vendor/*`（本地有 uPlot 就用本地的，否则 307 跳转 jsDelivr） |
 | `simtelemetry/adapters/base.py` | 适配器统一接口 `GameAdapter`：`connect()` / `read()` / `close()` / `is_running()` |
-| `simtelemetry/adapters/__init__.py` | 适配器注册表 + 按进程名自动识别游戏 |
+| `simtelemetry/adapters/__init__.py` | 适配器注册表（`_REGISTRY`：游戏 → 模块/类）+ `is_implemented()` + 按进程名自动识别游戏。新增游戏：写模块、在 `_REGISTRY` 里已有占位，模块存在就自动生效 |
 | `simtelemetry/adapters/winshm.py` | 只读打开命名共享内存（OpenFileMappingW + MapViewOfFile + VirtualQuery），**不会创建**映射（原因见文件头注释） |
 | `simtelemetry/adapters/procs.py` | ctypes + Toolhelp32 列出进程名（不依赖 psutil） |
+| `simtelemetry/adapters/acc.py` | ACC 适配器：`ACCAdapter` 只管开/读/关三个共享内存页，`translate()` 是纯函数（挡位 -1、`iLastTime` 的 INT32_MAX → None、`isInPit or isInPitLane`、`status == LIVE`、physics `packetId` 作 tick），Linux 上也能测 |
+| `tools/fake_acc.py` | `encode()`：合成车手 → ACC 结构体（测试用）；在 Windows 上直接运行会创建 `Local\acpmf_*` 并 60 Hz 写入，映射已存在时拒绝运行 |
+| `simtelemetry/adapters/lmu.py`、`lmu_structs.py` | LMU 适配器：读游戏自带的 `LMU_Data` 共享内存（需打开 Enable Plugins），只拷玩家那辆车的遥测 + 计分；`translate()` 是纯函数；计分比遥测慢时按速度外推位置；读到不合理的数（布局可能变了）时报警并不记录。结构体由脚本从 TinyPedal/pyLMUSharedMemory（MIT）机械转写 |
+| `tools/fake_lmu.py`、`tools/lmu_dump.py` | 假 LMU（测试 + Windows 端到端，映射已存在时拒绝运行）；只读地把 `LMU_Data` 原样存成文件，出问题时用来离线复现 |
+| `simtelemetry/setups/base.py`、`setups/lmu.py` | 各游戏共用的 `SetupItem` / `Change` / `diff_setups`；LMU `.svm` 解析（“键=格数//显示值”，显示值直接用游戏写的，不需要换算表；Non-adjustable / N/A / Fixed 归“不可调”） |
 | `simtelemetry/adapters/acc_structs.py` | ACC 三个页面的 ctypes 结构体（physics / graphics / static） |
 | `simtelemetry/adapters/simulated.py` | 合成车手（4.2 km 虚构赛道，带出站/进站/压线无效圈）+ `SimulatedAdapter` |
-| `web/index.html`、`web/live.html` | **目前只是占位页**（见下文） |
-| `tests/` | `test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket） |
+| `simtelemetry/setups/acc.py` | ACC 调教：`load_setup()` 解析 setup.json，`items()` 换算成游戏里显示的值（胎压 psi、刹车平衡 %、车高 mm…），`diff_setups()` 对比两份（默认跳过游戏算出来的派生值）。没登记的字段按原始值放进“其他”，不会丢 |
+| `simtelemetry/setups/acc_tables.py` | **自动生成，不要手改**。54 辆车的换算规则，移植自 Race Element（GPL-3） |
+| `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
+| `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
+| `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
+| `simtelemetry/setups/linking.py` | 圈 ↔ 调教：手动指定（`session_setups` 表，按会话）优先；否则在车型+赛道对得上的调教里取会话开始前最后修改的版本（读取时现算、不落库；LMU 名字按“小写词集合包含”匹配，对不上就不猜；导入的圈不猜）。圈列表“调教”列可点选，对比页“调教差异”卡片列出参考圈和对比圈调教的不同 |
+| `simtelemetry/lapfile.py` | 单圈导出 / 导入（`.lap.gz` = gzip JSON，只含这一圈和一句可选备注）：`python -m simtelemetry.lapfile export ID / import 文件`，网页上每圈有 ⤓ 导出、圈列表有“导入圈”。导入的圈 `session_uid` 以 `import-` 开头，按内容去重，能当参考圈，但不算个人最快圈 / 理论最快圈 |
+| `.github/workflows/release.yml`、`CHANGELOG.md` | 发布：改好 `simtelemetry/__init__.py` 和 `pyproject.toml` 的版本号、在 `CHANGELOG.md` 写 `## v<版本>` 一节，然后 `git tag v<版本> && git push origin v<版本>`，或者在 Actions 页面手动运行 Release（在当前提交上建标签）；会先跑完整 CI（复用 ci.yml），再建 Release 附 exe + SHA256，0.x 标为预发布 |
+| `simtelemetry/paths.py`、`packaging/lap_main.py` | 源码运行 / 打包成 exe 时资源（web/）和数据（data/）放哪；PyInstaller 入口 |
+| `.github/workflows/ci.yml` | CI：Ubuntu / Windows × Python 3.10 / 3.13 跑测试（Windows 上 `tests/test_windows_shm.py` 真的创建 ACC / LMU 共享内存走完整读取路径）；Windows 上打包 `Lap.exe`（含 uPlot，离线可用），启动冒烟测试后作为 artifact 上传 |
+| `simtelemetry/recording.py` | 原始录制：`RecordingAdapter` 包住任意适配器，把每次 `read()` 的结果（frames 模式）或适配器实际拷出的结构体原始字节（raw 模式，ACC / LMU，靠 `GameAdapter.wrap_pages()` 换页实现）连同时间戳写进 gzip 文件；也记连接/断开/出错/`is_running()`。`RecordingReader` 读到最后一条完整记录为止。格式、大小、隐私说明见文件头 |
+| `simtelemetry/replay.py` | `ReplayAdapter`（不在注册表里，只能 `--replay FILE` 选；原速 / `--replay-speed N` / `--replay-fast`；raw 录制重新走真的 `read()` + `translate()`）；`replay_laps()`；`python -m simtelemetry.replay FILE [--db X] [--dry-run] [-v]` 不开网页直接切圈、打印每圈标记 |
+| `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
+| `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
+| `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |
+| `tests/test_replay.py` | 录制 → 回放切出的圈和实时采集完全一致（frames 模式走真采集线程，含一次断开；raw 模式 ACC / LMU 走真 translate）；截断 / 被强制结束的文件；文件头 / 版本错误；`--record` / `--replay` 参数检查 |
+| `tests/` | `simdrive.py`（测试共用的合成车手驱动）、`test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket）、`test_acc_layout.py`（ACC 结构体大小/偏移）、`test_robustness.py`（未实现游戏、存储/命令行参数） |
 
 ## 已完成
 
@@ -42,25 +63,56 @@ python -m pytest -q tests              # 11 个测试，全部通过
 - **阶段 3 后端**：WebSocket 推送实时快照（速度、挡位、转速、油门/刹车、本圈时间、实时 delta、预测圈时、最近保存的圈），无变化时每 2 s 发一次心跳。
 - ACC 结构体定义已写好（逐字段对照官方文档）。
 
+- **分弯道对比 + 理论最快圈**：`/api/compare` 多了 `corners`（逐段表，原有字段不变），新增 `GET /api/theoretical_best?game=&track=&car=`（少于 2 个干净圈时为 null）。
+  圈对比页图表下面加了“弯道”表（点一行放大到该弯，再点还原），delta 图上淡色标出弯道段和 T1..Tn，圈列表标题旁显示理论最快圈。
+  只看速度找弯：全油门通过的弯找不到（合成赛道 9 个弯里 0.36 那个就是，找到 8 个）；跨起终点线的弯会被切成两半。
+  理论最快圈每次请求都读该组合全部干净圈的采样点，圈很多时可能要加缓存。
+
+- **调教（ACC）第一步**：换算表 + 解析 + 对比 + 命令行。已用真实调教文件核对过 296 GT3 的换算。
+
+- **录制 / 回放**（给社区反馈“某游戏切圈不对”用）：`--record FILE` 正常采集的同时录制，`--record-raw` 另存 ACC / LMU 的共享内存原始字节；
+  维护者拿到文件后 `python -m simtelemetry.replay FILE --dry-run` 看切出来的圈，改完代码再跑一遍验证，也可以直接做成回归测试。
+  时间戳就是采集线程切圈用的时间（`Collector` 新增 `clock` / `wrap` / `adapters` 三个可选参数），所以回放结果和当时完全一样。
+  合成数据实测 50 Hz 下约 115–145 KB/分钟。还没在真游戏的录制上试过；raw 模式只存了适配器拷过的那几段，改了结构体大小 / 偏移的修复需要 `tools/lmu_dump.py` 的整块数据。
+
 ## 做到一半
 
-1. **ACC 适配器 `adapters/acc.py` 还没写。** `acc_structs.py` 已就绪。计划中的映射关系：
-   `speedKmh`、`gas`、`brake`、`steerAngle`、`gear - 1`、`rpms`、`completedLaps`、`iCurrentTime`、
-   `normalizedCarPosition`、`isInPit or isInPitLane`、`isValidLap`、`iLastTime`（`INT32_MAX` 或 ≤ 0 → None）、
-   `status == ACC_LIVE` 作为 is_live、physics `packetId` 作为 tick；用 `read_consistent()` 防止读到写了一半的数据；
-   `is_running()` 用 `game_process_running("acc")`；track = static `track`，car = static `carModel`，session_type 来自 graphics `session`。
-   还需要一个 Windows 下的测试工具 `tools/fake_acc.py`：用 `mmap` 创建同名映射、写入 `SyntheticDriver` 的数据，端到端测试真实的 ACC 读取路径（如果映射已存在必须拒绝运行，避免写坏游戏的共享内存）。
-2. **前端两个页面没做**（`web/index.html`、`web/live.html` 是占位页）。设计已定：
-   - 圈对比：选择赛道+车型 → 圈列表（参考/对比单选、圈时、差距、日期、标记、删除）→ 5 张共享横轴的 uPlot 图（速度；油门向上/刹车向下画在同一张图；转向；挡位阶梯线；delta 以 0 为界上红下绿），用 `uPlot.sync(key)` 同步光标和缩放，横轴用米（未知赛道长度时用 %），支持导出 CSV。
-   - 实时面板：始终深色，delta 最大 + 居中 delta 条，挡位/速度大字，WebSocket 自动重连，过期检测。
-   - 颜色已用 dataviz 校验器检查过：参考圈蓝 `#2a78d6`（深色 `#3987e5`），对比圈橙 `#eb6834`（深色 `#d95926`），色盲安全，两种主题都通过。
-3. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。
-4. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
+1. **ACC 适配器已写完，但还没在真游戏上跑过。** Linux 上用假页面测了整条链路（结构体 → 切圈 → 标记 → 圈时取自游戏）。
+   需要在 Windows 上确认：① `python tools/fake_acc.py` + `python -m simtelemetry --game acc` 端到端能切圈；
+   ② 真 ACC 里挡位、方向盘左右、进出站标记是否正确。
+2. **前端第一版已做好，等你过目**（Playwright 在桌面 / 手机竖屏 / 手机横屏、浅色 / 深色下截图检查过，无横向滚动、无控制台报错）：
+   - 圈对比 `web/index.html`：赛道+车型下拉 → 圈列表（参考/对比单选、圈时、与最快干净圈的差距、标记、删除）→ 5 张共享横轴的 uPlot 图。
+     顺序：delta（最上面，0 以上红 = 对比圈更慢、以下绿）、速度、油门（0 以上）/刹车（0 以下）、挡位阶梯线、转向。
+     颜色只表示哪一圈（参考蓝 / 对比橙）；踏板松开处不画线；光标、框选放大、双击还原五张图同步；图上方一行显示光标处的数值；
+     横轴米（赛道长度未知时用 %），刻度取整；导出 CSV；当前选择写在 URL 里，刷新/分享能回到同一个对比。
+   - 实时面板 `web/live.html`：始终深色；delta 大字 + 居中 ±2 s 条（灰色 = 出站/进站等仅供参考）；挡位、速度、本圈、预测、上一圈、转速、油门/刹车条；
+     存下一圈时弹提示；WebSocket 断线指数退避重连，5 s 没消息视为断线；手机横放时左右分栏。
+   - uPlot 默认从 jsDelivr 加载（`/vendor/*` 307 跳转）；离线使用可把 `uPlot.iife.min.js`、`uPlot.min.css`（1.6.32）放进 `web/vendor/`。
+3. **调教管理**：调教库、调教页、圈 ↔ 调教关联（自动猜 + 手动改 + 对比页的调教差异）已完成。
+   自动猜只用文件修改时间，**没在真游戏上验证过准不准**（ACC 读取调教不改文件，所以“读了一套旧调教”时会猜成最近存的那套，要手动改）。
+   还没做：“应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
+   数据库 `SCHEMA_VERSION` 现在是 3（2、3 都只新增表，旧库打开时自动补上）。
+   已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
+4. **MoTeC 导入已做（命令行）**，用你发的 COTA 文件实测：SPEED 是 m/s（acctelemetry 也按 m/s 处理）、THROTTLE/BRAKE 0..100、
+   STEERANGLE 是方向盘角度（按 Race Element 的转向锁止角归一化）、GEAR 0 = N、`LAP_BEACON` 全是 0。
+   `TIME` 是本圈时间、过线归零，没有 `.ldx` 时靠它切圈（误差 ~20 ms），但实测有一次过线没归零、两圈连成一段 →
+   按“距离和其它圈中位数差 > 3% = 不完整”“停车 > 3 s = 进站圈”过滤。**还没拿到真实 `.ldx` 样本**，解析按 acctelemetry 的读法写的。
+   **已知限制**：MoTeC 里没有赛道位置通道，位置靠速度积分，两圈之间会错开几十米，对比图在刹车点上 delta 会出现尖刺；
+   可以考虑用弯心（速度极小值）分段对齐来修正。实时采集的圈用游戏给的位置，不受影响。还没有网页上传入口。
+5. **LMU 已写完，但还没在真游戏上跑过**（作者自己主要玩 ACC 和 LMU）。
+   - 采集：`LMU_Data` 布局只有 pyLMUSharedMemory 一个来源（它照游戏 `Support/SharedMemoryInterface` 下的 S397 头文件写；官方头文件不允许再分发，所以没收录）。
+     KoDriver、goLMUSharedMemory 等都是从它推出来的，**没有独立实测**。大小/偏移由 `tests/test_lmu.py` 固定，适配器连上后做合理性检查。
+     需要在 Windows 上确认：`tools/fake_lmu.py` + `--game lmu` 能切圈；真 LMU 里挡位、方向、进出站、无效圈、计分刷新频率。数据不对时用 `tools/lmu_dump.py` 存一份。
+     进程名 `Le Mans Ultimate.exe` 来自 pyLMUSharedMemory 的常量，未核对。
+   - 调教：`.svm` 格式按 91 个公开 LMU 调教（GitHub seralaci/Le-Mans-Ultimate-Setups）核对过，全部能解析；没有收录任何真实调教。
+     调教目录默认在 Steam 库（读 `libraryfolders.vdf`）里找 `Le Mans Ultimate/UserData/player/Settings`，可用 `--lmu-setups` 指定。
+6. **阶段 4 没开始**：`adapters/ac.py`（初代 AC）、`adapters/iracing.py`（pyirsdk）不存在。（给社区做的，排在 LMU 后面）
+7. 调研结果（AC1 结构体、iRacing 变量）**没有保存进仓库**，云端需要重新查。
 
 ## 已知问题
 
-- `--game acc/ac/iracing` 目前会因为找不到适配器模块而报错；用 `--game auto` 时如果检测到这些游戏进程，采集线程会因同样的 ImportError 退出（`collector._candidates()` 里的 `create_adapter` 没包在 try 里）。没开游戏时不受影响。
-- ACC 没有提供赛道长度（`trackSPlineLength` 实测为 0），对比图横轴只能用 %。可行办法：用参考圈的速度积分估算赛道长度。
+- `--game acc/ac/iracing` 目前会在启动时直接报“适配器还没有实现”；`--game auto` 检测到这些游戏时只打一条警告并跳过（以前采集线程会因 ImportError 退出，已修复）。
+- ACC 没有提供赛道长度（`trackSPlineLength` 实测为 0）：现在每个完整圈按速度积分估算（`analysis.estimate_track_length`，合成数据误差 < 1 m），存在该圈的 `track_length_m` 里。
 - ACC 的 `isValidLap` 在比赛 / hotstint 会话里压线后也常常保持 1（社区实测），这些会话的“有效”标记不可靠；需要靠官方广播 UDP 接口才能拿到准确值。
 - `steerAngle` 的正负方向（左转是正还是负）文档没写，需要实车记录确认；挡位编码 0=R/1=N/2=1 挡来自社区实测，不在文档里。
 - 测试时 Starlette 提示 `httpx` 用于 TestClient 已弃用（建议改用 `httpx2`），只是警告。
@@ -73,7 +125,7 @@ python -m pytest -q tests              # 11 个测试，全部通过
 - `#pragma pack(4)` 和映射名 `Local\acpmf_physics/graphics/static` **不在 PDF 里**，来自官方示例头文件 `SharedFileOut.h`（社区转载副本），并且多个独立实现都一致。
 - 与 6 个以上独立实现交叉核对过（PyAccSharedMemory、TinyPedal、CrewChief、gabbo76 等）。按文档计算的大小：physics 800、graphics 1588、static 820 字节。
   关键偏移：graphics `completedLaps` 132、`iCurrentTime` 140、`normalizedCarPosition` 248、`isInPitLane` 1236、`isValidLap` 1408；static `carModel` 68、`track` 134。
-  **还没写把这些大小和偏移固定下来的测试**（计划写 `tests/test_acc_layout.py`）。
+  这些大小和偏移已由 `tests/test_acc_layout.py` 固定下来。
 - 文档本身有歧义的地方：`trackConfiguration` 没写数组长度（按示例头文件取 [33]，代码里标了 TODO）；
   `currentMaxRpm` 和 `AllowTyreBlankets` 文档写 float、头文件写 int（都是 4 字节，不影响偏移）。
 - 社区实测的时序：跨线时 `iCurrentTime` 会比 `completedLaps` 早一帧或几帧归零；`iLastTime` 和圈数在同一帧更新；

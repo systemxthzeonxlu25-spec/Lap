@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any, Callable
 
 from ..models import SessionInfo, TelemetryFrame
 
@@ -34,3 +35,10 @@ class GameAdapter(ABC):
     def is_running(self) -> bool | None:
         """游戏进程是否在运行（自动检测用）。None = 不知道，交给 connect() 判断。"""
         return None
+
+    def wrap_pages(self, wrap: Callable[[str, Any], Any]) -> bool:
+        """把适配器读的每个共享内存页换成 wrap(页名, 原来的页)，录制 / 回放原始字节用（见 recording.py）。
+
+        页对象只需要 open() / read() / read_at() / close()。不读共享内存的适配器返回 False。
+        """
+        return False
