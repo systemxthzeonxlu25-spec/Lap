@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
-python -m pytest -q                    # 118 个测试，全部通过（另有 4 个只在 Windows 上跑；配置在 pyproject.toml）
+python -m pytest -q                    # 123 个测试，全部通过（另有 4 个只在 Windows 上跑；配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -43,6 +43,7 @@ python -m pytest -q                    # 118 个测试，全部通过（另有 4
 | `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
 | `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
 | `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
+| `simtelemetry/setups/linking.py` | 圈 ↔ 调教：手动指定（`session_setups` 表，按会话）优先；否则在车型+赛道对得上的调教里取会话开始前最后修改的版本（读取时现算、不落库；LMU 名字按“小写词集合包含”匹配，对不上就不猜；导入的圈不猜）。圈列表“调教”列可点选，对比页“调教差异”卡片列出参考圈和对比圈调教的不同 |
 | `simtelemetry/lapfile.py` | 单圈导出 / 导入（`.lap.gz` = gzip JSON，只含这一圈和一句可选备注）：`python -m simtelemetry.lapfile export ID / import 文件`，网页上每圈有 ⤓ 导出、圈列表有“导入圈”。导入的圈 `session_uid` 以 `import-` 开头，按内容去重，能当参考圈，但不算个人最快圈 / 理论最快圈 |
 | `simtelemetry/paths.py`、`packaging/lap_main.py` | 源码运行 / 打包成 exe 时资源（web/）和数据（data/）放哪；PyInstaller 入口 |
 | `.github/workflows/ci.yml` | CI：Ubuntu / Windows × Python 3.10 / 3.13 跑测试（Windows 上 `tests/test_windows_shm.py` 真的创建 ACC / LMU 共享内存走完整读取路径）；Windows 上打包 `Lap.exe`（含 uPlot，离线可用），启动冒烟测试后作为 artifact 上传 |
@@ -86,9 +87,10 @@ python -m pytest -q                    # 118 个测试，全部通过（另有 4
    - 实时面板 `web/live.html`：始终深色；delta 大字 + 居中 ±2 s 条（灰色 = 出站/进站等仅供参考）；挡位、速度、本圈、预测、上一圈、转速、油门/刹车条；
      存下一圈时弹提示；WebSocket 断线指数退避重连，5 s 没消息视为断线；手机横放时左右分栏。
    - uPlot 默认从 jsDelivr 加载（`/vendor/*` 307 跳转）；离线使用可把 `uPlot.iife.min.js`、`uPlot.min.css`（1.6.32）放进 `web/vendor/`。
-3. **调教管理**：调教库 + 调教页已完成。还没做：把调教和圈关联（会话开始时猜“这辆车这条赛道最近改过的那份”，在面板上确认）、
-   “应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
-   数据库 `SCHEMA_VERSION` 现在是 2（只新增了两张表，旧库打开时自动补上）。
+3. **调教管理**：调教库、调教页、圈 ↔ 调教关联（自动猜 + 手动改 + 对比页的调教差异）已完成。
+   自动猜只用文件修改时间，**没在真游戏上验证过准不准**（ACC 读取调教不改文件，所以“读了一套旧调教”时会猜成最近存的那套，要手动改）。
+   还没做：“应用到游戏”（写回游戏目录前必须先备份原文件）。原则：默认只读游戏目录。
+   数据库 `SCHEMA_VERSION` 现在是 3（2、3 都只新增表，旧库打开时自动补上）。
    已知不确定：`rideHeight` 有 4 个值，Race Element 只用 [0]（前）和 [2]（后），另外两个含义未知；电子类（TC/ABS/引擎图）只显示原始值。
 4. **MoTeC 导入已做（命令行）**，用你发的 COTA 文件实测：SPEED 是 m/s（acctelemetry 也按 m/s 处理）、THROTTLE/BRAKE 0..100、
    STEERANGLE 是方向盘角度（按 Race Element 的转向锁止角归一化）、GEAR 0 = N、`LAP_BEACON` 全是 0。

@@ -18,6 +18,7 @@ from .lapfile import export_filename, export_lap, import_lap
 from .live import LiveHub
 from .paths import RESOURCE_ROOT
 from .setups.library import SetupLibrary
+from .setups.linking import annotate_laps, names_match, set_session_setup, setup_candidates, version_info
 from .storage import Storage
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
 
     @app.get("/api/laps")
     def api_laps(game: str, track: str, car: str):
-        laps = storage.list_laps(game, track, car)
+        laps = annotate_laps(storage, storage.list_laps(game, track, car))
         best = storage.best_lap(game, track, car)
         return {"laps": laps, "best_lap_id": best["id"] if best else None}
 
@@ -144,6 +145,25 @@ def create_app(storage: Storage, hub: LiveHub, collector: Collector | None = Non
             return await asyncio.to_thread(import_lap, storage, data)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
+
+    @app.get("/api/setup_choices")
+    def api_setup_choices(game: str, car: str, track: str):
+        """给圈选调教时的候选：车型对得上的所有调教版本，赛道也对得上的排前面。"""
+        out = setup_candidates(storage, game, car)
+        for c in out:
+            c["track_match"] = names_match(c["track"], track)
+        out.sort(key=lambda c: not c["track_match"])            # 稳定排序：组内仍按时间新→旧
+        return out[:300]
+
+    @app.put("/api/sessions/{session_uid}/setup")
+    def api_session_setup(session_uid: str, version_id: int | None = Body(None), auto: bool = Body(False)):
+        """给一个会话（同一次上赛道的所有圈）指定调教；auto=true 回到自动猜，version_id=null 表示“没有/不记得”。"""
+        if storage.find_session_lap(session_uid) is None:
+            raise HTTPException(404, "session not found")
+        if version_id is not None and version_info(storage, version_id) is None:
+            raise HTTPException(404, "setup version not found")
+        set_session_setup(storage, session_uid, version_id, auto=auto)
+        return {"session_uid": session_uid, "version_id": version_id, "auto": auto}
 
     @app.get("/api/theoretical_best")
     def api_theoretical_best(game: str, track: str, car: str):

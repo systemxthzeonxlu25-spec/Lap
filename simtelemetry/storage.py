@@ -15,7 +15,7 @@ from .paths import DATA_ROOT
 
 DEFAULT_DB = DATA_ROOT / "data" / "telemetry.db"
 
-SCHEMA_VERSION = 2          # 2：加了调教库（setup_files / setup_versions）；只新增表，旧库打开时自动补上
+SCHEMA_VERSION = 3          # 2：调教库（setup_files / setup_versions）；3：session_setups。都只新增表，旧库打开时自动补上
 
 # “干净圈”：参与最快圈比较（与 models.is_clean_lap 保持一致）
 CLEAN_SQL = "is_valid = 1 AND is_complete = 1 AND is_out_lap = 0 AND is_in_lap = 0"
@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS setup_versions (
     captured_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_setup_versions_file ON setup_versions (file_id, id);
+
+-- 用户手动指定的“这个会话用的是哪套调教”（没有记录的会话按时间自动猜，见 setups/linking.py）
+CREATE TABLE IF NOT EXISTS session_setups (
+    session_uid        TEXT PRIMARY KEY,
+    setup_version_id   INTEGER REFERENCES setup_versions (id) ON DELETE SET NULL,   -- NULL = 用户选了“不记得 / 没有”
+    set_at             TEXT NOT NULL
+);
 """
 
 _LAP_COLUMNS = (

@@ -21,6 +21,19 @@
 .chart-title .hint { white-space: nowrap; }
 .u-select { background: var(--hover); }
 .uplot { font-family: inherit; }
+.setup-btn { border: none; background: none; padding: 0; min-height: 0; color: var(--text); text-decoration: underline dotted;
+             text-underline-offset: 3px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-btn.none { color: var(--muted); }
+dialog { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text);
+         padding: 0; width: min(520px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.dlg { padding: 16px; display: grid; gap: 10px; }
+.dlg h2 { font-size: 15px; margin: 0; }
+.dlg p { margin: 0; }
+.dlg select { width: 100%; }
+.row-end { display: flex; justify-content: flex-end; gap: 8px; }
+td.val { text-align: right; }
+td.group { font-weight: 600; color: var(--text-2); font-size: 12px; padding-top: 12px; }
 /* ---- corners */
 #corners-card .table-wrap { max-height: none; }
 #corners tr { cursor: pointer; }
@@ -59,6 +72,7 @@
           <th class="num">圈时</th>
           <th class="num">差距</th>
           <th>标记</th>
+          <th title="这一圈用的哪套调教；“猜”= 按时间自动猜的，点一下可以改">调教</th>
           <th>时间</th>
           <th></th>
         </tr></thead>
@@ -101,7 +115,29 @@
     </div>
     <div class="empty" id="corners-empty" hidden>参考圈的速度曲线里没有找到明显减速的弯。</div>
   </section>
+
+  <section class="card" id="setupdiff-card" hidden>
+    <div class="card-head">
+      <h2>调教差异</h2>
+      <span class="hint" id="setupdiff-hint"></span>
+    </div>
+    <div class="table-wrap" style="max-height: 420px">
+      <table><tbody id="setupdiff"></tbody></table>
+    </div>
+  </section>
 </main>
+
+<dialog id="setup-dlg">
+  <form method="dialog" class="dlg">
+    <h2 id="setup-dlg-title">这一圈用的哪套调教？</h2>
+    <p class="hint">改的是同一次上赛道的所有圈。“自动”= 取会话开始前最后修改的那套。</p>
+    <select id="setup-dlg-select" aria-label="选择调教"></select>
+    <div class="row-end">
+      <button value="cancel">取消</button>
+      <button value="ok" id="setup-dlg-ok">保存</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="/vendor/uPlot.iife.min.js"></script>
 <script>
@@ -125,6 +161,9 @@ function fmtGap(ms) {
 function fmtDelta(s) {
   if (s == null || Number.isNaN(s)) return "–";
   return (s > 0 ? "+" : s < 0 ? "−" : "±") + Math.abs(s).toFixed(3) + " s";
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function fmtDate(iso) {
   const d = new Date(iso);
@@ -241,6 +280,7 @@ function renderLaps() {
       <td class="num ${lap.id === state.bestId ? "best" : ""}">${fmtLap(lap.lap_time_ms)}</td>
       <td class="num">${best && lap.is_clean ? fmtGap(lap.lap_time_ms - best.lap_time_ms) : ""}</td>
       <td>${flags.map(([t, bad]) => `<span class="chip${bad ? " bad" : ""}">${t}</span>`).join("")}</td>
+      <td>${setupCell(lap)}</td>
       <td>${fmtDate(lap.recorded_at)}</td>
       <td><button class="del exp" title="导出这一圈（.lap.gz，发给别人对比）" aria-label="导出第 ${lap.lap_number} 圈">⤓</button><button class="del" title="删除这一圈" aria-label="删除第 ${lap.lap_number} 圈">✕</button></td>`;
     const [refIn, cmpIn] = tr.querySelectorAll("input");
@@ -248,6 +288,7 @@ function renderLaps() {
     cmpIn.onchange = () => { state.cmp = lap.id; renderLaps(); loadCompare(); };
     tr.querySelector(".del:not(.exp)").onclick = () => deleteLap(lap);
     tr.querySelector(".exp").onclick = () => exportLap(lap);
+    tr.querySelector(".setup-btn").onclick = () => chooseSetup(lap);
     tbody.append(tr);
   }
 }
@@ -315,6 +356,7 @@ async function loadCompare() {
   if (!state.ref || !state.cmp) {
     $("charts-card").hidden = true;
     $("corners-card").hidden = true;
+    $("setupdiff-card").hidden = true;
     destroyPlots();
     return;
   }
@@ -328,6 +370,93 @@ async function loadCompare() {
   renderLegend();
   buildPlots();
   renderCorners();
+  renderSetupDiff();
+}
+
+// ------------------------------------------------------------------ 圈 ↔ 调教
+function setupCell(lap) {
+  const s = lap.setup;
+  if (lap.is_imported && !s) return `<span class="hint">—</span>`;
+  if (!s || s.version_id == null) {
+    return `<button class="setup-btn none" title="${s ? "已标记为没有 / 不记得" : "没有猜到，点一下选"}">${s ? "无" : "选择…"}</button>`;
+  }
+  const tag = s.source === "auto" ? ' <span class="chip" title="按时间自动猜的，点名字可以改">猜</span>' : "";
+  return `<button class="setup-btn" title="${esc(s.name)}（${esc(s.track)}）">${esc(s.name)}</button>${tag}`;
+}
+
+async function chooseSetup(lap) {
+  const c = state.combo;
+  const q = new URLSearchParams({ game: c.game, car: c.car, track: c.track });
+  const choices = await getJSON("/api/setup_choices?" + q);
+  const sel = $("setup-dlg-select");
+  const cur = lap.setup;
+  sel.innerHTML = `<option value="auto">自动猜测</option><option value="none">没有 / 不记得</option>`;
+  for (const [label, items] of [["这条赛道", choices.filter((x) => x.track_match)], ["其他赛道", choices.filter((x) => !x.track_match)]]) {
+    if (!items.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    for (const x of items) {
+      const o = document.createElement("option");
+      o.value = String(x.version_id);
+      o.textContent = `${x.name}（${x.track} · ${fmtDate(x.file_mtime)}）`;
+      g.append(o);
+    }
+    sel.append(g);
+  }
+  sel.value = !cur ? "auto" : cur.source === "auto" ? "auto" : cur.version_id == null ? "none" : String(cur.version_id);
+  if (!choices.length) $("setup-dlg-title").textContent = "调教库里没有这辆车的调教";
+  else $("setup-dlg-title").textContent = "这一圈用的哪套调教？";
+  const dlg = $("setup-dlg");
+  dlg.returnValue = "";
+  dlg.showModal();
+  await new Promise((r) => dlg.addEventListener("close", r, { once: true }));
+  if (dlg.returnValue !== "ok") return;
+  const v = sel.value;
+  const body = v === "auto" ? { auto: true } : { version_id: v === "none" ? null : Number(v) };
+  const r = await fetch(`/api/sessions/${encodeURIComponent(lap.session_uid)}/setup`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { alert("保存失败：" + r.status); return; }
+  await refreshLaps();
+}
+
+// 重新拉圈列表（保留当前的参考 / 对比选择）
+async function refreshLaps() {
+  const c = state.combo;
+  const r = await getJSON("/api/laps?" + new URLSearchParams({ game: c.game, track: c.track, car: c.car }));
+  state.laps = r.laps;
+  state.bestId = r.best_lap_id;
+  renderLaps();
+  renderSetupDiff();
+}
+
+async function renderSetupDiff() {
+  const card = $("setupdiff-card"), body = $("setupdiff"), hint = $("setupdiff-hint");
+  const ref = state.laps.find((l) => l.id === state.ref), cmp = state.laps.find((l) => l.id === state.cmp);
+  const a = ref?.setup?.version_id, b = cmp?.setup?.version_id;
+  if (a == null || b == null) { card.hidden = true; return; }
+  card.hidden = false;
+  body.innerHTML = "";
+  const guessed = [ref, cmp].some((l) => l.setup.source === "auto") ? "（含自动猜测，可在圈列表里改）" : "";
+  if (a === b) {
+    hint.textContent = `两圈用的是同一套调教：${ref.setup.name}${guessed}`;
+    return;
+  }
+  hint.textContent = `参考：${ref.setup.name} → 对比：${cmp.setup.name}${guessed}`;
+  let d;
+  try { d = await getJSON(`/api/setups/diff?a=${a}&b=${b}`); } catch (e) {
+    hint.textContent += "（调教库没有启用，看不到差异）";
+    return;
+  }
+  if (state.ref !== ref.id || state.cmp !== cmp.id) return;
+  if (!d.changes.length) { hint.textContent += " · 两套调教的设置完全一样"; return; }
+  body.insertAdjacentHTML("beforeend", `<tr><th>项目</th><th class="num"><span class="ref-key"></span>参考</th><th></th><th><span class="cmp-key"></span>对比</th><th class="num">变化</th></tr>`);
+  let group = null;
+  for (const c of d.changes) {
+    if (c.group !== group) { group = c.group; body.insertAdjacentHTML("beforeend", `<tr><td class="group" colspan="5">${esc(group)}</td></tr>`); }
+    const clicks = c.clicks && !["策略", "其他"].includes(c.group) ? `${c.clicks > 0 ? "+" : "−"}${Math.abs(c.clicks)} 格` : "";
+    body.insertAdjacentHTML("beforeend", `<tr><td>${esc(c.label)}</td><td class="val">${esc(c.a ? c.a.display : "（无）")}</td>
+      <td class="hint">→</td><td>${esc(c.b ? c.b.display : "（无）")}</td><td class="num">${clicks}</td></tr>`);
+  }
 }
 
 function renderLegend() {
