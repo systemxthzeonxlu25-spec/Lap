@@ -145,6 +145,7 @@ class LapRecorder:
             self._start_lap(lc, wall)
         elif lc != self._last_lap_count:
             out += self.reset(f"圈数从 {self._last_lap_count} 变为 {lc}")
+            self.session_uid = uuid.uuid4().hex[:12]        # 重开 / 新会话：和之前的圈分开（调教关联按会话算）
             self._start_lap(lc, wall)
         elif self._buf is not None and len(self._buf) > 0 and \
                 f.lap_time_ms < self._buf.last_t_ms - LAP_TIME_RESET_MS:

@@ -227,6 +227,7 @@ async function selectCombo(combo, fromUrl) {
   state.theo = null;
   const q = new URLSearchParams({ game: combo.game, track: combo.track, car: combo.car });
   const r = await getJSON("/api/laps?" + q);
+  if (state.combo !== combo) return;                       // 加载期间又换了赛道+车型
   state.laps = r.laps;
   state.bestId = r.best_lap_id;
   const url = new URLSearchParams(location.search);
@@ -288,7 +289,8 @@ function renderLaps() {
     cmpIn.onchange = () => { state.cmp = lap.id; renderLaps(); loadCompare(); };
     tr.querySelector(".del:not(.exp)").onclick = () => deleteLap(lap);
     tr.querySelector(".exp").onclick = () => exportLap(lap);
-    tr.querySelector(".setup-btn").onclick = () => chooseSetup(lap);
+    const setupBtn = tr.querySelector(".setup-btn");      // 导入的圈没有调教按钮
+    if (setupBtn) setupBtn.onclick = () => chooseSetup(lap);
     tbody.append(tr);
   }
 }

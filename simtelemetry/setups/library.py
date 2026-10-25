@@ -169,7 +169,9 @@ class SetupLibrary:
                 counts["new_files"] += 1
             else:
                 file_id = row["id"]
-                con.execute("UPDATE setup_files SET last_seen = ?, missing = 0 WHERE id = ?", (now, file_id))
+                # 同一路径的文件可能被换成另一辆车的调教（LMU 的车型写在文件里）：身份跟着最新内容走
+                con.execute("UPDATE setup_files SET last_seen = ?, missing = 0, car = ?, track = ? WHERE id = ?",
+                            (now, car, track, file_id))
             last = con.execute("SELECT sha256 FROM setup_versions WHERE file_id = ? ORDER BY id DESC LIMIT 1",
                                (file_id,)).fetchone()
             if last is None or last["sha256"] != sha:

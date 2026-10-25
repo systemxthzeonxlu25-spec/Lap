@@ -1,6 +1,6 @@
 [project]
 name = "simtelemetry"
-version = "0.1.0"
+version = "0.1.1"
 description = "模拟赛车遥测：采集（ACC / AC / iRacing）→ SQLite → 圈对比 + 实时面板"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"

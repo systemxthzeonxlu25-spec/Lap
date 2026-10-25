@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -77,17 +78,25 @@ def parse_lap_file(data: bytes) -> tuple[LapRecord, str]:
     n = len(samples["t_ms"])
     if n < 2 or any(len(samples[c]) != n for c in SAMPLE_CHANNELS):
         raise ValueError("采样点数据不完整")
+    length = lap["track_length_m"]
+    if length is not None:
+        try:
+            length = float(length)
+        except (TypeError, ValueError):
+            raise ValueError("圈文件里的赛道长度不是数字") from None
+        if not (math.isfinite(length) and length > 0):
+            raise ValueError("圈文件里的赛道长度不对")
     try:
         recorded = datetime.fromisoformat(lap["recorded_at"])
         session = SessionInfo(game=str(lap["game"]), track=str(lap["track"]), car=str(lap["car"]),
-                              track_length_m=lap["track_length_m"], session_type=str(lap["session_type"]))
+                              track_length_m=length, session_type=str(lap["session_type"]))
         rec = LapRecord(
             session=session, session_uid=IMPORT_PREFIX + hashlib.sha256(raw).hexdigest()[:12],
             lap_number=int(lap["lap_number"]), lap_time_ms=int(lap["lap_time_ms"]), time_source=str(lap["time_source"]),
             is_valid=bool(lap["is_valid"]), is_out_lap=bool(lap["is_out_lap"]), is_in_lap=bool(lap["is_in_lap"]),
             is_complete=bool(lap["is_complete"]), recorded_at=recorded,
             samples={c: list(samples[c]) for c in SAMPLE_CHANNELS},
-            track_length_m=lap["track_length_m"],
+            track_length_m=length,
         )
     except (TypeError, ValueError, KeyError) as e:
         raise ValueError(f"圈文件内容有误：{e}") from e
