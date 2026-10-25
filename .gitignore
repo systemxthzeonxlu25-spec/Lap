@@ -37,3 +37,6 @@ Desktop.ini
 build/
 dist/
 *.spec
+
+# Claude Code 子 agent 的临时 worktree
+.claude/worktrees/
