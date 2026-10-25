@@ -45,7 +45,7 @@ python -m pytest -q                    # 123 个测试，全部通过（另有 4
 | `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
 | `simtelemetry/setups/linking.py` | 圈 ↔ 调教：手动指定（`session_setups` 表，按会话）优先；否则在车型+赛道对得上的调教里取会话开始前最后修改的版本（读取时现算、不落库；LMU 名字按“小写词集合包含”匹配，对不上就不猜；导入的圈不猜）。圈列表“调教”列可点选，对比页“调教差异”卡片列出参考圈和对比圈调教的不同 |
 | `simtelemetry/lapfile.py` | 单圈导出 / 导入（`.lap.gz` = gzip JSON，只含这一圈和一句可选备注）：`python -m simtelemetry.lapfile export ID / import 文件`，网页上每圈有 ⤓ 导出、圈列表有“导入圈”。导入的圈 `session_uid` 以 `import-` 开头，按内容去重，能当参考圈，但不算个人最快圈 / 理论最快圈 |
-| `.github/workflows/release.yml`、`CHANGELOG.md` | 发布：改好 `simtelemetry/__init__.py` 和 `pyproject.toml` 的版本号、在 `CHANGELOG.md` 写 `## v<版本>` 一节，然后 `git tag v<版本> && git push origin v<版本>`；会先跑完整 CI（复用 ci.yml），再建 Release 附 exe + SHA256，0.x 标为预发布 |
+| `.github/workflows/release.yml`、`CHANGELOG.md` | 发布：改好 `simtelemetry/__init__.py` 和 `pyproject.toml` 的版本号、在 `CHANGELOG.md` 写 `## v<版本>` 一节，然后 `git tag v<版本> && git push origin v<版本>`，或者在 Actions 页面手动运行 Release（在当前提交上建标签）；会先跑完整 CI（复用 ci.yml），再建 Release 附 exe + SHA256，0.x 标为预发布 |
 | `simtelemetry/paths.py`、`packaging/lap_main.py` | 源码运行 / 打包成 exe 时资源（web/）和数据（data/）放哪；PyInstaller 入口 |
 | `.github/workflows/ci.yml` | CI：Ubuntu / Windows × Python 3.10 / 3.13 跑测试（Windows 上 `tests/test_windows_shm.py` 真的创建 ACC / LMU 共享内存走完整读取路径）；Windows 上打包 `Lap.exe`（含 uPlot，离线可用），启动冒烟测试后作为 artifact 上传 |
 | `simtelemetry/recording.py` | 原始录制：`RecordingAdapter` 包住任意适配器，把每次 `read()` 的结果（frames 模式）或适配器实际拷出的结构体原始字节（raw 模式，ACC / LMU，靠 `GameAdapter.wrap_pages()` 换页实现）连同时间戳写进 gzip 文件；也记连接/断开/出错/`is_running()`。`RecordingReader` 读到最后一条完整记录为止。格式、大小、隐私说明见文件头 |
