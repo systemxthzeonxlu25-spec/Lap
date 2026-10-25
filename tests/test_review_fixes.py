@@ -182,3 +182,12 @@ def test_imported_lap_time_overflow_is_rejected(tmp_path):
     raw = raw.replace(f'"lap_time_ms":{doc["lap"]["lap_time_ms"]}'.encode(), b'"lap_time_ms":1e400')   # → inf
     with pytest.raises(ValueError):
         parse_lap_file(gzip.compress(raw))
+
+
+def test_timer_restart_with_same_lap_count_starts_new_session_uid():
+    rec = LapRecorder()
+    frame = lambda t, pos, tick: TelemetryFrame(100, 1, 0, 0, 3, 7000, 0, t, pos, False, True, None, True, tick=tick)
+    rec.feed(SESSION, frame(30000, 0.4, 1), 0.0)
+    first = rec.session_uid
+    rec.feed(SESSION, frame(500, 0.5, 2), 1.0)               # 圈数还是 0，计时从 30 s 倒退到 0.5 s，不在起终点附近
+    assert rec.session_uid != first

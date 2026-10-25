@@ -161,6 +161,7 @@ class LapRecorder:
             log.info("第 %s 圈计时倒退（%d → %d ms），视为重开，丢弃", self._buf.lap_number,
                      self._buf.last_t_ms, f.lap_time_ms)
             self._buf = None
+            self.session_uid = uuid.uuid4().hex[:12]    # 圈数没变的重开 / 回维修区：也算新会话（可能换了调教）
             self._start_lap(lc, wall)
 
         self._last_tick = f.tick
