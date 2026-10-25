@@ -79,6 +79,11 @@ class ACCAdapter(GameAdapter):
     def _pages(self) -> tuple[Page, Page, Page]:
         return self._physics, self._graphics, self._static
 
+    def wrap_pages(self, wrap) -> bool:
+        self._physics, self._graphics, self._static = (
+            wrap(n, pg) for n, pg in zip(("physics", "graphics", "static"), self._pages()))
+        return True
+
     def connect(self) -> bool:
         if all(p.open() for p in self._pages()):
             return True

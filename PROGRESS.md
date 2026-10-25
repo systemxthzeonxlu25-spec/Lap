@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python -m simtelemetry --game sim      # 合成数据，不开游戏也能跑完整流程
 python -m simtelemetry                 # 自动识别游戏（sim、acc、lmu 已实现；acc / lmu 还没在真游戏上验证）
-python -m pytest -q                    # 76 个测试，全部通过（配置在 pyproject.toml）
+python -m pytest -q                    # 101 个测试，全部通过（配置在 pyproject.toml）
 ```
 
 默认监听 `0.0.0.0:8000`：`/` 是圈对比，`/live` 是实时面板。数据库默认在 `data/telemetry.db`。
@@ -42,9 +42,12 @@ python -m pytest -q                    # 76 个测试，全部通过（配置在
 | `simtelemetry/setups/library.py` | 调教库：后台每 15 s 扫描 `<根>/<车>/<赛道>/*.json`（只读），内容变了就在 `setup_versions` 存一个版本；文件消失标 `missing`，历史保留；备注/标签。`--acc-setups DIR` 指定目录，`--no-setups` 关闭 |
 | `web/setups.html`、`web/app.css` | 调教页（文件列表 + 搜索、备注/标签、版本 A/B 选择（可跨文件）、对比表、单版本按四轮分列查看、下载原始 JSON）；`app.css` 是圈对比页和调教页共用的颜色/基础样式 |
 | `simtelemetry/motec.py` | 导入 ACC 导出的 MoTeC `.ld`（+ 同名 `.ldx`）：`python -m simtelemetry.motec 文件.ld [--car] [--track] [--dry-run]`。格式移植自 gotzl/ldparser（GPL-3）；同一文件不会重复导入；导入的圈 `session_type = 'motec'` |
+| `simtelemetry/recording.py` | 原始录制：`RecordingAdapter` 包住任意适配器，把每次 `read()` 的结果（frames 模式）或适配器实际拷出的结构体原始字节（raw 模式，ACC / LMU，靠 `GameAdapter.wrap_pages()` 换页实现）连同时间戳写进 gzip 文件；也记连接/断开/出错/`is_running()`。`RecordingReader` 读到最后一条完整记录为止。格式、大小、隐私说明见文件头 |
+| `simtelemetry/replay.py` | `ReplayAdapter`（不在注册表里，只能 `--replay FILE` 选；原速 / `--replay-speed N` / `--replay-fast`；raw 录制重新走真的 `read()` + `translate()`）；`replay_laps()`；`python -m simtelemetry.replay FILE [--db X] [--dry-run] [-v]` 不开网页直接切圈、打印每圈标记 |
 | `simtelemetry/setups/__main__.py` | `python -m simtelemetry.setups show a.json` / `diff a.json b.json [--derived]` |
 | `tools/gen_acc_setup_tables.py` | 从 Race Element 源码生成 `acc_tables.py`：只做正则 + 受限表达式解析，不执行下载的代码，遇到不认识的写法直接报错。Race Element 更新后：`git clone --depth 1 https://github.com/RiddleTime/race-element` 再跑 `python tools/gen_acc_setup_tables.py <目录>` |
 | `web/index.html`、`web/live.html` | 圈对比页、实时面板（见“做到一半”第 2 条） |
+| `tests/test_replay.py` | 录制 → 回放切出的圈和实时采集完全一致（frames 模式走真采集线程，含一次断开；raw 模式 ACC / LMU 走真 translate）；截断 / 被强制结束的文件；文件头 / 版本错误；`--record` / `--replay` 参数检查 |
 | `tests/` | `simdrive.py`（测试共用的合成车手驱动）、`test_pipeline_sim.py`（合成数据 → 切圈 → 存库 → 对比）、`test_analysis.py`（插值/回绕/阶梯重采样）、`test_server.py`（REST + WebSocket）、`test_acc_layout.py`（ACC 结构体大小/偏移）、`test_robustness.py`（未实现游戏、存储/命令行参数） |
 
 ## 已完成
@@ -55,6 +58,11 @@ python -m pytest -q                    # 76 个测试，全部通过（配置在
 - ACC 结构体定义已写好（逐字段对照官方文档）。
 
 - **调教（ACC）第一步**：换算表 + 解析 + 对比 + 命令行。已用真实调教文件核对过 296 GT3 的换算。
+
+- **录制 / 回放**（给社区反馈“某游戏切圈不对”用）：`--record FILE` 正常采集的同时录制，`--record-raw` 另存 ACC / LMU 的共享内存原始字节；
+  维护者拿到文件后 `python -m simtelemetry.replay FILE --dry-run` 看切出来的圈，改完代码再跑一遍验证，也可以直接做成回归测试。
+  时间戳就是采集线程切圈用的时间（`Collector` 新增 `clock` / `wrap` / `adapters` 三个可选参数），所以回放结果和当时完全一样。
+  合成数据实测 50 Hz 下约 115–145 KB/分钟。还没在真游戏的录制上试过；raw 模式只存了适配器拷过的那几段，改了结构体大小 / 偏移的修复需要 `tools/lmu_dump.py` 的整块数据。
 
 ## 做到一半
 

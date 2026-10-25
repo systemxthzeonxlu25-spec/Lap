@@ -142,6 +142,10 @@ class LMUAdapter(GameAdapter):
         self._warned: str | None = None
         self._hinted = False
 
+    def wrap_pages(self, wrap) -> bool:
+        self._page = wrap(LMU_MAP, self._page)
+        return True
+
     def connect(self) -> bool:
         if self._page.open():
             return True
