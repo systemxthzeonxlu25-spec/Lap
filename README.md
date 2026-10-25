@@ -29,6 +29,14 @@ python -m simtelemetry.lapfile import xxx.lap.gz
 
 Windows 用户也可以直接下载 CI 打包的 `Lap.exe`（GitHub Actions → 最新一次 CI → Artifacts → Lap-windows），双击运行，数据存在 exe 旁边的 `data/`。
 
+切圈不对、想反馈问题时，录一段原始数据（文件里有赛道/车型，`--record-raw` 时还有玩家名/服务器名，不会上传，发给别人前请自己确认）：
+
+```bash
+python -m simtelemetry --game acc --record acc.strec [--record-raw]   # 正常采集，同时录制
+python -m simtelemetry --replay acc.strec [--replay-speed 4 | --replay-fast] --db repro.db   # 用录制代替游戏
+python -m simtelemetry.replay acc.strec --dry-run                     # 不开网页，直接打印切出来的圈和标记
+```
+
 打开 `http://127.0.0.1:8000/`（圈对比）或 `/live`（实时面板）。
 
 目前 `sim`、`acc`、`lmu` 能采集（ACC / LMU 还没在真游戏上验证；LMU 需要在游戏设置里打开 Enable Plugins），AC / iRacing 还在做。架构、进度和已知问题见 [PROGRESS.md](PROGRESS.md)。
